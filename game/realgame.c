@@ -1745,7 +1745,7 @@ void turn_zoom(int smer) {
         turn_right();
     }
     chod_s_postavama(0);
-    if (battle || minimap_enabled || minimap_enabled || (game_extras & EX_ALWAYS_MINIMAP))
+    if (battle || (game_extras & EX_ALWAYS_MINIMAP))
         draw_medium_map();
     update_mysky();
     ukaz_mysku();
@@ -2035,3 +2035,5 @@ int postavy_propadnout(int sector)
      }
   return z;
   }
+
+
