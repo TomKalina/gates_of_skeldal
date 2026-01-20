@@ -1325,6 +1325,75 @@ static int select_drop_inventory_place(TMOB *p) {
    return pl;
 }
 
+static int is_item_template_eligible(const TITEM *it) {
+   if (it->flags & ITF_NOREMOVE) return 0;
+   if (it->druh == TYP_PENIZE) return 0;
+   if (it->druh == TYP_SPECIALNI) return 0;
+   if (it->druh == TYP_SVITEK || it->druh == TYP_SVITXT) return 0;
+   if (it->druh == TYP_RUNA || it->druh == TYP_PRACH) return 0;
+   if (it->druh == TYP_JIDLO || it->druh == TYP_VODA || it->druh == TYP_LEKTVAR) return 0;
+   if (it->umisteni == PL_NIKAM) return 0;
+   return 1;
+}
+
+static int mob_item_scale_pct(const TMOB *p) {
+   int sum = p->vlastnosti[VLS_SILA] + p->vlastnosti[VLS_OBRAT] +
+             p->vlastnosti[VLS_MAXHIT] + p->vlastnosti[VLS_SMAGIE];
+   int avg = sum / 4;
+   int scale = (avg * 100) / 50;
+   if (scale < 50) scale = 50;
+   if (scale > 150) scale = 150;
+   return scale;
+}
+
+static short create_random_scaled_item(const TMOB *p) {
+   int i, count = 0;
+   for (i = 0; i < it_count_orgn; ++i) {
+      if (is_item_template_eligible(glob_items + i)) count++;
+   }
+   if (count == 0) return 0;
+
+   int pick = rnd(count);
+   int idx = -1;
+   for (i = 0; i < it_count_orgn; ++i) {
+      if (!is_item_template_eligible(glob_items + i)) continue;
+      if (pick-- == 0) { idx = i; break; }
+   }
+   if (idx < 0) return 0;
+
+   TITEM it = glob_items[idx];
+   int scale = mob_item_scale_pct(p);
+   for (i = 0; i < VLS_MAX; ++i) {
+      if (it.zmeny[i] != 0) {
+         int v = (it.zmeny[i] * scale) / 100;
+         if (v == 0) v = (it.zmeny[i] > 0) ? 1 : -1;
+         if (v > 32767) v = 32767;
+         if (v < -32768) v = -32768;
+         it.zmeny[i] = (short)v;
+      }
+   }
+   if (it.cena || it.cena_high) {
+      uint32_t price = it.cena + ((uint32_t)it.cena_high << 16);
+      price = (price * (uint32_t)scale) / 100;
+      it.cena = (unsigned short)(price & 0xFFFF);
+      it.cena_high = (unsigned short)((price >> 16) & 0xFFFF);
+   }
+   it.flags &= ~(ITF_DUPLIC | ITF_FREE);
+   return create_unique_item(&it);
+}
+
+static void drop_random_mob_item(TMOB *p) {
+   short c[2];
+   int pl;
+
+   if (rnd(100) >= 10) return;
+   c[0] = create_random_scaled_item(p);
+   if (!c[0]) return;
+   c[1] = 0;
+   pl = select_drop_inventory_place(p);
+   push_item(p->sector, pl, c);
+}
+
 static int drop_inventory(TMOB *p)
   {
   int i,pl;
@@ -1373,6 +1442,7 @@ void mob_check_death(int num,TMOB *p)
   p->vlajky&=~MOB_IN_BATTLE & ~MOB_LIVE;
   free_path(num);
   drop_inventory(p);
+  drop_random_mob_item(p);
   if (mob_map[sect]==num+MOB_START) mob_map[sect]=p->next;
   else
      {
