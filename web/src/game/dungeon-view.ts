@@ -2,6 +2,8 @@ import { computeViewCells, stepBackward, stepForward, turnLeft, turnRight, type 
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
+  left: ReadonlyMap<number, ImageData>;
+  right: ReadonlyMap<number, ImageData>;
   floor: ReadonlyMap<number, ImageData>;
   ceil: ReadonlyMap<number, ImageData>;
 }
@@ -12,12 +14,15 @@ export interface DungeonViewHandle {
 
 // engine1.h: VIEW_SIZE_X/Y. The remaining (480 - 360) is left for a status
 // bar placeholder — the real bottom bar/compass/spell icons (builder.c) are
-// part of the inventory UI (#14), not this first static dungeon view.
+// part of the inventory UI (#14), not this first dungeon view.
 const VIEWPORT = { x: 0, y: 0, width: 640, height: 360 };
 
-// Not the original's precomputed zoom tables (those are a DOS-blitter
-// technique — see docs/port-graph.md) — just a geometric shrink per depth
-// that gives the same "receding corridor" silhouette via drawImage scaling.
+// engine1.c's calc_points() builds its whole perspective grid the same way:
+// each depth's x/y is the previous depth's x/y minus x/FACTOR_3D — a
+// geometric shrink toward the vanishing point. This is that same recurrence
+// collapsed into a closed-form scale factor per depth (the DOS zoom tables
+// then resample textures into these rects — see show_cel/show_cel2 — which
+// is exactly what drawImage's dest-rect scaling does).
 const DEPTH_SCALE = 0.62;
 
 interface Rect {
@@ -54,64 +59,76 @@ function toDrawable(image: ImageData): HTMLCanvasElement {
   return canvas;
 }
 
-const colorCache = new WeakMap<ImageData, string>();
-function averageColor(image: ImageData): string {
-  let cached = colorCache.get(image);
-  if (cached) return cached;
-
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let count = 0;
-  const stride = 4 * 7; // sample every 7th pixel — plenty for a flat average
-  for (let i = 0; i < image.data.length; i += stride) {
-    r += image.data[i] ?? 0;
-    g += image.data[i + 1] ?? 0;
-    b += image.data[i + 2] ?? 0;
-    count++;
-  }
-  cached = count > 0 ? `rgb(${Math.round(r / count)},${Math.round(g / count)},${Math.round(b / count)})` : '#333';
-  colorCache.set(image, cached);
-  return cached;
-}
-
 // TS counterpart of the first static view shown by builder.c's render_scene
-// when entering a map. Renders the front-facing wall (the actual blocking
-// wall at the end of the visible corridor) with its real decoded texture;
-// floor, ceiling, and receding side walls are flat-shaded with the real
-// average color of their textures rather than fully texture-mapped — see
-// docs/port-graph.md for what a faithful engine1.c/engine2.c port would add.
+// when entering a map — every surface (front wall, receding side walls,
+// floor, ceiling) is drawn with its real decoded texture, matching what
+// show_cel/show_cel2/fcdraw actually do (scale a texture into a
+// perspective-shaped destination), just using Canvas2D's built-in image
+// scaling and clip paths instead of the original's hand-rolled DOS
+// scanline/zoom-table blitters. See docs/port-graph.md for the remaining
+// gaps (per-scanline floor/ceiling sampling is approximated as a few
+// depth-banded slices rather than fcdraw's true per-row table).
 export function runDungeonView(ctx: CanvasRenderingContext2D, initial: DungeonState, textures: DungeonTextureSet): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
 
-  function drawFloorAndCeiling(cell: ViewCell, depth: number): void {
+  function drawFloorAndCeilingBand(cell: ViewCell, depth: number, totalDepths: number): void {
     const near = rectAtDepth(depth);
     const far = rectAtDepth(depth + 1);
-    const floorImage = textures.floor.get(cell.floorTexture);
-    const ceilImage = textures.ceil.get(cell.ceilTexture);
+    const bandTopFrac = depth / totalDepths;
+    const bandBottomFrac = (depth + 1) / totalDepths;
 
-    ctx.fillStyle = floorImage ? averageColor(floorImage) : '#332';
+    // Floor: near/far bottom edges. Texture rows are sampled so the nearest
+    // band reads from the bottom of the source strip and the farthest band
+    // from the top — floor/ceiling art is authored as a tall strip for
+    // exactly this kind of depth-banded sampling (see port-graph.md).
+    const floorImage = textures.floor.get(cell.floorTexture);
+    ctx.save();
     ctx.beginPath();
     ctx.moveTo(near.x, near.y + near.height);
     ctx.lineTo(near.x + near.width, near.y + near.height);
     ctx.lineTo(far.x + far.width, far.y + far.height);
     ctx.lineTo(far.x, far.y + far.height);
     ctx.closePath();
-    ctx.fill();
+    ctx.clip();
+    const floorBandY = far.y + far.height;
+    const floorBandHeight = near.y + near.height - floorBandY;
+    if (floorImage) {
+      const bitmap = toDrawable(floorImage);
+      const srcY = floorImage.height * (1 - bandBottomFrac);
+      const srcH = floorImage.height * (bandBottomFrac - bandTopFrac);
+      ctx.drawImage(bitmap, 0, srcY, floorImage.width, srcH, near.x, floorBandY, near.width, floorBandHeight);
+    } else {
+      ctx.fillStyle = '#332';
+      ctx.fillRect(near.x, floorBandY, near.width, floorBandHeight);
+    }
+    ctx.restore();
 
-    ctx.fillStyle = ceilImage ? averageColor(ceilImage) : '#223';
+    // Ceiling: mirrored band at the top edges, same sampling direction.
+    const ceilImage = textures.ceil.get(cell.ceilTexture);
+    ctx.save();
     ctx.beginPath();
     ctx.moveTo(near.x, near.y);
     ctx.lineTo(near.x + near.width, near.y);
     ctx.lineTo(far.x + far.width, far.y);
     ctx.lineTo(far.x, far.y);
     ctx.closePath();
-    ctx.fill();
+    ctx.clip();
+    const ceilBandHeight = far.y - near.y;
+    if (ceilImage) {
+      const bitmap = toDrawable(ceilImage);
+      const srcY = ceilImage.height * (1 - bandBottomFrac);
+      const srcH = ceilImage.height * (bandBottomFrac - bandTopFrac);
+      ctx.drawImage(bitmap, 0, srcY, ceilImage.width, srcH, near.x, near.y, near.width, ceilBandHeight);
+    } else {
+      ctx.fillStyle = '#223';
+      ctx.fillRect(near.x, near.y, near.width, ceilBandHeight);
+    }
+    ctx.restore();
   }
 
-  function drawSideWall(near: Rect, far: Rect, side: 'left' | 'right', color: string): void {
-    ctx.fillStyle = color;
+  function drawSideWall(near: Rect, far: Rect, side: 'left' | 'right', image: ImageData | undefined): void {
+    ctx.save();
     ctx.beginPath();
     if (side === 'left') {
       ctx.moveTo(near.x, near.y);
@@ -125,19 +142,27 @@ export function runDungeonView(ctx: CanvasRenderingContext2D, initial: DungeonSt
       ctx.lineTo(near.x + near.width, near.y + near.height);
     }
     ctx.closePath();
-    ctx.fill();
+    ctx.clip();
+
+    if (image) {
+      const boundX = side === 'left' ? near.x : far.x + far.width;
+      const boundWidth = side === 'left' ? far.x - near.x : near.x + near.width - (far.x + far.width);
+      ctx.drawImage(toDrawable(image), boundX, near.y, boundWidth, near.height);
+    } else {
+      ctx.fillStyle = '#443';
+      ctx.fillRect(near.x, near.y, near.width, near.height);
+    }
+    ctx.restore();
   }
 
   function drawSideWalls(cell: ViewCell, depth: number): void {
     const near = rectAtDepth(depth);
     const far = rectAtDepth(depth + 1);
     if (cell.leftWallTexture !== null) {
-      const image = textures.main.get(cell.leftWallTexture);
-      drawSideWall(near, far, 'left', image ? averageColor(image) : '#443');
+      drawSideWall(near, far, 'left', textures.left.get(cell.leftWallTexture));
     }
     if (cell.rightWallTexture !== null) {
-      const image = textures.main.get(cell.rightWallTexture);
-      drawSideWall(near, far, 'right', image ? averageColor(image) : '#443');
+      drawSideWall(near, far, 'right', textures.right.get(cell.rightWallTexture));
     }
   }
 
@@ -157,7 +182,7 @@ export function runDungeonView(ctx: CanvasRenderingContext2D, initial: DungeonSt
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const cells = computeViewCells(state.map, state.sector, state.direction);
-    for (let i = cells.length - 1; i >= 0; i--) drawFloorAndCeiling(cells[i]!, i);
+    for (let i = cells.length - 1; i >= 0; i--) drawFloorAndCeilingBand(cells[i]!, i, cells.length);
     for (let i = cells.length - 1; i >= 0; i--) drawSideWalls(cells[i]!, i);
 
     const lastCell = cells[cells.length - 1];

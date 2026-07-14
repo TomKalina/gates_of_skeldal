@@ -121,6 +121,8 @@ function loadTextureSet(archive: DDLArchive, names: readonly string[]): Readonly
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
   return {
     main: loadTextureSet(archive, map.mainTextures),
+    left: loadTextureSet(archive, map.leftTextures),
+    right: loadTextureSet(archive, map.rightTextures),
     floor: loadTextureSet(archive, map.floorTextures),
     ceil: loadTextureSet(archive, map.ceilTextures),
   };

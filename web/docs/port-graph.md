@@ -63,12 +63,21 @@ parity vs C build where applicable). Updated as issues close.
     a geometric per-depth scale factor (`DEPTH_SCALE`) into `drawImage` is a
     structurally faithful port of the technique, just without the exact DOS
     pixel-stride tables.
-  - Only the front-facing (blocking) wall gets the real decoded texture.
-    Side walls and floor/ceiling are flat-shaded with the real *average*
-    color of their textures (`averageColor()`), not texture-mapped — a
-    faithful trapezoid render of those would need either a strip-based
-    scanline approach (`engine1.c`'s actual `fcdraw`/`T_FLOOR_MAP` technique)
-    or WebGL, both bigger asks than this first screen.
+  - Every surface uses its real decoded texture (not a flat average color —
+    an earlier version of this file oversimplified here after too shallow a
+    read of `engine1.c`). Front wall: `drawImage` into the depth-scaled rect,
+    same as `show_cel2`. Side walls: a `ctx.clip()` trapezoid (matching the
+    shape `show_cel`'s `yss`/`ysd` skew produces) with the real texture
+    `drawImage`-stretched into its bounding box. Floor/ceiling: a handful of
+    depth-banded trapezoids, each sampling a proportional horizontal slice of
+    the (tall, pre-authored-as-a-strip) floor/ceiling texture — an
+    approximation of `fcdraw`'s true per-scanline `T_FLOOR_MAP`/`T_CEIL_MAP`
+    tables, not a literal port of them.
+  - Known rough edge: a thin wedge of saturated color (green/yellow) has been
+    observed at some depth-transition seams on receding side walls — not yet
+    root-caused; may be a genuine colored-glass texture detail or a clip/seam
+    artifact in the trapezoid math. Worth another look before calling the
+    side-wall rendering done.
   - View-stopping uses `SD_PRIM_VIS` (is a wall texture rendered here) as a
     simple "opaque wall" test; the original also has door/arch/see-through
     nuance (`SD_LEFT_ARC`/`SD_RIGHT_ARC`, double-sided walls) this doesn't
