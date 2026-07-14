@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+
+# Copyrighted game assets and fixtures derived from them — NEVER commit.
+# Only hash manifests of fixtures are committed (see docs in #3).
+fixtures/
+*.DDL
+*.MAP
+*.DAT
+*.ENC
+*.MUS
