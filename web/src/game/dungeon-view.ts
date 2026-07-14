@@ -104,7 +104,11 @@ export function runDungeonView(ctx: CanvasRenderingContext2D, initial: DungeonSt
     }
     ctx.restore();
 
-    // Ceiling: mirrored band at the top edges, same sampling direction.
+    // Ceiling: mirrored band at the top edges. Sampled in the OPPOSITE
+    // direction from the floor — verified against the real LES1C01A.PCX,
+    // whose beams are wide/spread at the top of the texture (the "directly
+    // overhead" look) and converge to a dark vanishing point at the bottom
+    // (the "far ahead" look), the mirror image of the floor's convention.
     const ceilImage = textures.ceil.get(cell.ceilTexture);
     ctx.save();
     ctx.beginPath();
@@ -117,7 +121,7 @@ export function runDungeonView(ctx: CanvasRenderingContext2D, initial: DungeonSt
     const ceilBandHeight = far.y - near.y;
     if (ceilImage) {
       const bitmap = toDrawable(ceilImage);
-      const srcY = ceilImage.height * (1 - bandBottomFrac);
+      const srcY = ceilImage.height * bandTopFrac;
       const srcH = ceilImage.height * (bandBottomFrac - bandTopFrac);
       ctx.drawImage(bitmap, 0, srcY, ceilImage.width, srcH, near.x, near.y, near.width, ceilBandHeight);
     } else {

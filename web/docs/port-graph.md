@@ -72,7 +72,14 @@ parity vs C build where applicable). Updated as issues close.
     depth-banded trapezoids, each sampling a proportional horizontal slice of
     the (tall, pre-authored-as-a-strip) floor/ceiling texture — an
     approximation of `fcdraw`'s true per-scanline `T_FLOOR_MAP`/`T_CEIL_MAP`
-    tables, not a literal port of them.
+    tables, not a literal port of them. **The floor and ceiling strips are
+    sampled in opposite directions** — verified by decoding and looking at
+    the real textures directly: floor art (e.g. `LES1F01A.PCX`) has its
+    near/detailed content at the bottom of the file and hazy/far content at
+    the top, while ceiling art (e.g. `LES1C01A.PCX`) is the mirror image
+    (wide/near beams at the top of the file, converging to a dark far
+    vanishing point at the bottom) — don't copy-paste one sampling formula
+    for both.
   - Known rough edge: a thin wedge of saturated color (green/yellow) has been
     observed at some depth-transition seams on receding side walls — not yet
     root-caused; may be a genuine colored-glass texture detail or a clip/seam
