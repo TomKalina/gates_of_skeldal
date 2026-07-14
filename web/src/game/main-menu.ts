@@ -1,5 +1,10 @@
 import { MENU_ITEMS, MENU_RECT, hitTestMenu, navigateMenu, type MenuChoice } from '../gui/menu-nav';
 
+export interface MainMenuAssets {
+  background?: ImageData;
+  logo?: { image: ImageData; y: number };
+}
+
 export interface MainMenuHandle {
   choice: Promise<MenuChoice>;
   dispose(): void;
@@ -7,10 +12,11 @@ export interface MainMenuHandle {
 
 // TS counterpart of menu.c's enter_menu(): renders the 5-entry title menu and
 // resolves once a choice is made (mouse click, Enter/Space, or Escape = Quit,
-// mirroring E_QUIT_GAME_KEY in klavesnice()). Background art, animation and
-// music (LOGO*.PCX, MAINMENU.PCX, TRACK06.MUS) are not wired up yet — this is
-// placeholder rendering pending the asset pipeline (#2/#5/#8/#12).
-export function runMainMenu(ctx: CanvasRenderingContext2D): MainMenuHandle {
+// mirroring E_QUIT_GAME_KEY in klavesnice()). When real MAINMENU.PCX/LOGO00.PCX
+// art is supplied it's drawn as-is (the button labels are baked into the art);
+// otherwise falls back to a plain text menu. Button hit-testing is a hardcoded
+// 5-way band split standing in for the real per-pixel MENUVOL5.PCX mask.
+export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAssets = {}): MainMenuHandle {
   const canvas = ctx.canvas;
   let selected: MenuChoice = 0;
   let resolveChoice!: (choice: MenuChoice) => void;
@@ -18,23 +24,39 @@ export function runMainMenu(ctx: CanvasRenderingContext2D): MainMenuHandle {
     resolveChoice = resolve;
   });
 
-  function draw(): void {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  function drawBackground(): void {
+    if (assets.background) {
+      ctx.putImageData(assets.background, 0, 0);
+      if (assets.logo) ctx.putImageData(assets.logo.image, 0, assets.logo.y);
+    } else {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ccc';
+      ctx.font = '28px monospace';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText('Gates of Skeldal', 40, 80);
+    }
+  }
 
-    ctx.fillStyle = '#ccc';
-    ctx.font = '28px monospace';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText('Gates of Skeldal', 40, 80);
+  function draw(): void {
+    drawBackground();
 
     const bandHeight = MENU_RECT.height / MENU_ITEMS.length;
-    ctx.font = '20px monospace';
-    ctx.textBaseline = 'middle';
-    MENU_ITEMS.forEach((label, i) => {
-      const y = MENU_RECT.y + i * bandHeight + bandHeight / 2;
-      ctx.fillStyle = i === selected ? '#ffe38c' : '#8899aa';
-      ctx.fillText(label, MENU_RECT.x, y);
-    });
+    if (!assets.background) {
+      ctx.font = '20px monospace';
+      ctx.textBaseline = 'middle';
+      MENU_ITEMS.forEach((label, i) => {
+        const y = MENU_RECT.y + i * bandHeight + bandHeight / 2;
+        ctx.fillStyle = i === selected ? '#ffe38c' : '#8899aa';
+        ctx.fillText(label, MENU_RECT.x, y);
+      });
+    } else {
+      // Real art already renders the labels; just outline the highlighted band.
+      const y = MENU_RECT.y + selected * bandHeight;
+      ctx.strokeStyle = '#ffe38c';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(MENU_RECT.x + 1, y + 1, MENU_RECT.width - 2, bandHeight - 2);
+    }
   }
 
   function pick(index: MenuChoice): void {

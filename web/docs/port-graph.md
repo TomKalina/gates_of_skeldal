@@ -17,10 +17,14 @@ parity vs C build where applicable). Updated as issues close.
   consolidates them into explicit state objects (issue #11).
 - Early vertical slice (`src/game/main-menu.ts`) jumps ahead of strict issue
   order to get a click/keyboard-navigable main menu on screen before the real
-  platform kernel (#7), graphics lib (#8) and PCX/mask assets (#5) exist. It
-  uses a plain Canvas2D context and a hardcoded 5-way band split standing in
-  for the real per-pixel `MENUVOL5.PCX` hotspot mask. Replace both when #8
-  (bgraph/RGB555 presenter) and #5 (image codecs) land.
+  platform kernel (#7) and graphics lib (#8) exist. It uses a plain Canvas2D
+  context and a hardcoded 5-way band split standing in for the real per-pixel
+  `MENUVOL5.PCX` hotspot mask. Real `MAINMENU.PCX`/`LOGO00.PCX` art is decoded
+  and drawn (via `src/formats/ddl-archive.ts` + `src/codecs/pcx.ts`) once the
+  user picks their own `SKELDAL.DDL` through a plain `<input type=file>`
+  (`src/platform/asset-source.ts` — a minimal precursor to the real OPFS-backed
+  intake screen in #2). Replace the band-split hit-test and the ad hoc file
+  picker when #2/#8 land.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -70,7 +74,7 @@ parity vs C build where applicable). Updated as issues close.
 | `gui.c` | GUI object core | `src/gui/core.ts` | pending |
 | `basicobj.c` | basic GUI widgets | `src/gui/basicobj.ts` | pending |
 | `inicfg.c` | INI config parser | `src/io/ini.ts` | pending |
-| `pcx.c` | PCX-family image decoder | `src/codecs/pcx.ts` | pending |
+| `pcx.c` | PCX-family image decoder | `src/codecs/pcx.ts` | ported (RLE + palette decode; validated pixel-for-pixel against real `MAINMENU.PCX`/`LOGO00.PCX` via a throwaway script, see #4/#5) |
 | `mgifmem.c` | MGIF video decoder (memory) | `src/codecs/mgif.ts` | pending |
 | `mgifmapmem.c` | MGIF mapped-memory variant | `src/codecs/mgif.ts` | pending |
 | `mgifplaya.c` | MGIF playback + audio sync | `src/codecs/mgif.ts` | pending |
@@ -80,6 +84,15 @@ parity vs C build where applicable). Updated as issues close.
 | `strlite.c` | string helpers | `src/io/strings.ts` | pending |
 | `string_table.cpp` | string table container | `src/io/string-table.ts` | pending |
 | `file_to_base64.cpp` | build tool | not ported (build-time only) | excluded |
+
+## Archive format (reference: `tools/ddl_ar_class.cpp`, issue #4)
+
+Not part of `skeldal_libs`/`skeldal_main` — `tools/ddl_ar.cpp`/`ddl_ar_class.cpp` is
+the standalone CLI that packs/reads the `.DDL` archive `skeldal.ini`'s
+`[paths] data` entry points at. Ported to `src/formats/ddl-archive.ts`
+(status: **ported**, unit-tested against a synthetic fixture and manually
+validated byte-for-byte against the real `data/SKELDAL.DDL` on a dev machine —
+2482 files, correct offsets for every entry probed).
 
 ## platform/ (targets `skeldal_platform` + `skeldal_sdl`, issues #2, #7, #12)
 
