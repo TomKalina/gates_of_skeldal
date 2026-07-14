@@ -6,8 +6,9 @@ export function createScreenCanvas(root: HTMLElement): CanvasRenderingContext2D 
   canvas.width = SCREEN_WIDTH;
   canvas.height = SCREEN_HEIGHT;
   canvas.style.imageRendering = 'pixelated';
-  canvas.style.maxWidth = '100%';
-  canvas.style.height = 'auto';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.objectFit = 'contain';
   root.replaceChildren(canvas);
 
   const ctx = canvas.getContext('2d');

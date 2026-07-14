@@ -66,11 +66,19 @@ export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAsset
     resolveChoice(index);
   }
 
+  // The canvas is displayed via CSS object-fit: contain, so its layout box
+  // (getBoundingClientRect) is generally larger than the letterboxed content
+  // it actually draws into — invert that scale-and-center transform here.
   function toCanvasPoint(e: MouseEvent): { x: number; y: number } {
     const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const displayWidth = canvas.width * scale;
+    const displayHeight = canvas.height * scale;
+    const offsetX = rect.left + (rect.width - displayWidth) / 2;
+    const offsetY = rect.top + (rect.height - displayHeight) / 2;
     return {
-      x: ((e.clientX - rect.left) * canvas.width) / rect.width,
-      y: ((e.clientY - rect.top) * canvas.height) / rect.height,
+      x: (e.clientX - offsetX) / scale,
+      y: (e.clientY - offsetY) / scale,
     };
   }
 
