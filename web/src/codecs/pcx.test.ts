@@ -51,4 +51,39 @@ describe('decodePcx', () => {
     expect(alpha(0, 1)).toBe(255);
     expect(alpha(1, 1)).toBe(255);
   });
+
+  it('"corner" mode treats the top-left pixel index as transparent when it dominates the image', () => {
+    // buildPcx's corner index (1) covers half the 2x2 image — well past the
+    // dominance threshold.
+    const image = decodePcx(buildPcx(), { transparentIndex: 'corner' });
+    const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
+
+    expect(alpha(0, 0)).toBe(0);
+    expect(alpha(1, 0)).toBe(0);
+    expect(alpha(0, 1)).toBe(255);
+  });
+
+  it('"corner" mode leaves the image untouched when the corner index is not dominant', () => {
+    // A 4x4 image where the corner pixel (index 1) appears only once —
+    // should NOT be treated as a colorkey background (avoids punching holes
+    // in full-bleed art whose corner happens to land on real content).
+    const header = new Uint8Array(128);
+    const view = new DataView(header.buffer);
+    view.setUint16(8, 3, true); // xmax -> width 4
+    view.setUint16(10, 3, true); // ymax -> height 4
+    header[3] = 8;
+    view.setUint16(66, 4, true); // bytesPerLine
+
+    // 4 rows x 4 literal bytes; only position (0,0) is index 1, rest are index 2.
+    const data = new Uint8Array([1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+    const palette = new Uint8Array(768);
+    palette.set([10, 20, 30], 1 * 3);
+    palette.set([40, 50, 60], 2 * 3);
+    const pcx = new Uint8Array([...header, ...data, ...palette]);
+
+    const image = decodePcx(pcx, { transparentIndex: 'corner' });
+    const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
+    expect(alpha(0, 0)).toBe(255);
+    expect(alpha(1, 0)).toBe(255);
+  });
 });

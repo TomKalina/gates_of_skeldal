@@ -35,12 +35,23 @@ function decompressLine(src: Uint8Array, srcPos: number, outLen: number): { row:
 
 export interface DecodePcxOptions {
   // Sprite assets (e.g. the character-generator body sprites) use a solid
-  // palette index — verified as index 0 against the real CHAR*.PCX files —
-  // as a colorkey background that the original blitter skips. Plain
-  // background/UI art has no such convention, so this is opt-in per call
-  // site rather than a global default.
-  transparentIndex?: number;
+  // palette index as a colorkey background that the original blitter skips.
+  // Plain full-bleed background/UI art has no such convention, so this is
+  // opt-in per call site rather than a global default.
+  //
+  // The index isn't a fixed constant across asset types — verified index 0
+  // (pure blue) for CHAR*.PCX body sprites, but index 1 (olive green) for
+  // map wall-decoration textures like LES1A21A.PCX. 'corner' resolves it
+  // per-image from the top-left pixel's palette index instead of assuming a
+  // fixed number, which is the more general case. Only applied if that index
+  // also covers a large share of the image (see CORNER_DOMINANCE_THRESHOLD)
+  // — a full-bleed texture whose corner just happens to land on a real
+  // content pixel (e.g. a tree trunk) shouldn't get holes punched in it
+  // wherever that same color reappears.
+  transparentIndex?: number | 'corner';
 }
+
+const CORNER_DOMINANCE_THRESHOLD = 0.2;
 
 export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): PcxImage {
   if (data.length < HEADER_SIZE + PALETTE_SIZE) {
@@ -58,24 +69,35 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
   const paletteOffset = data.length - PALETTE_SIZE;
   const palette = data.subarray(paletteOffset, paletteOffset + PALETTE_SIZE);
 
-  const rgba = new Uint8ClampedArray(new ArrayBuffer(width * height * 4));
+  const indices = new Uint8Array(width * height);
   let srcPos = HEADER_SIZE;
   for (let y = 0; y < height; y++) {
     const { row, bytesConsumed } = decompressLine(data, srcPos, bytesPerLine);
     srcPos += bytesConsumed;
-    for (let x = 0; x < width; x++) {
-      const paletteIndex = row[x] ?? 0;
-      const out = (y * width + x) * 4;
-      if (paletteIndex === options.transparentIndex) {
-        rgba[out + 3] = 0;
-        continue;
-      }
-      const index = paletteIndex * 3;
-      rgba[out] = palette[index] ?? 0;
-      rgba[out + 1] = palette[index + 1] ?? 0;
-      rgba[out + 2] = palette[index + 2] ?? 0;
-      rgba[out + 3] = 255;
+    indices.set(row, y * width);
+  }
+
+  let transparentIndex = options.transparentIndex;
+  if (transparentIndex === 'corner') {
+    const cornerIndex = indices[0] ?? 0;
+    let cornerCount = 0;
+    for (const idx of indices) if (idx === cornerIndex) cornerCount++;
+    transparentIndex = cornerCount / indices.length >= CORNER_DOMINANCE_THRESHOLD ? cornerIndex : undefined;
+  }
+
+  const rgba = new Uint8ClampedArray(new ArrayBuffer(width * height * 4));
+  for (let i = 0; i < indices.length; i++) {
+    const paletteIndex = indices[i]!;
+    const out = i * 4;
+    if (paletteIndex === transparentIndex) {
+      rgba[out + 3] = 0;
+      continue;
     }
+    const p = paletteIndex * 3;
+    rgba[out] = palette[p] ?? 0;
+    rgba[out + 1] = palette[p + 1] ?? 0;
+    rgba[out + 2] = palette[p + 2] ?? 0;
+    rgba[out + 3] = 255;
   }
 
   return { width, height, rgba };

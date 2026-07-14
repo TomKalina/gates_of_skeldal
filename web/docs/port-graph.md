@@ -80,11 +80,16 @@ parity vs C build where applicable). Updated as issues close.
     (wide/near beams at the top of the file, converging to a dark far
     vanishing point at the bottom) — don't copy-paste one sampling formula
     for both.
-  - Known rough edge: a thin wedge of saturated color (green/yellow) has been
-    observed at some depth-transition seams on receding side walls — not yet
-    root-caused; may be a genuine colored-glass texture detail or a clip/seam
-    artifact in the trapezoid math. Worth another look before calling the
-    side-wall rendering done.
+  - Resolved: the "green/yellow wedge at depth-transition seams" noted below
+    was this same colorkey-background bug, just on wall/side textures whose
+    background happened to be a different color. `decodePcx()`'s
+    `transparentIndex: 'corner'` mode (auto-detect from the top-left pixel,
+    only applied if it's dominant enough to actually be a background fill —
+    see `pcx.ts`) is now used for the main/left/right wall texture sets.
+    Confirmed against the real `LES1A21A.PCX` (a window/shelf decoration
+    whose background is index 1, olive green, not the index-0-blue
+    convention from the character sprites) — the color varies per asset, so
+    this can't be a single hardcoded constant.
   - View-stopping uses `SD_PRIM_VIS` (is a wall texture rendered here) as a
     simple "opaque wall" test; the original also has door/arch/see-through
     nuance (`SD_LEFT_ARC`/`SD_RIGHT_ARC`, double-sided walls) this doesn't

@@ -109,20 +109,26 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
 
 // TSECTOR.floor/ceil and TSTENA.prim are 1-based indices into the map's own
 // embedded filename list (realgame.c: prepare_graphics); 0 means "none".
-function loadTextureSet(archive: DDLArchive, names: readonly string[]): ReadonlyMap<number, ImageData> {
+function loadTextureSet(
+  archive: DDLArchive,
+  names: readonly string[],
+  transparentIndex?: 'corner',
+): ReadonlyMap<number, ImageData> {
   const textures = new Map<number, ImageData>();
   names.forEach((name, i) => {
     const raw = archive.extract(name);
-    if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw)));
+    if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw, transparentIndex ? { transparentIndex } : {})));
   });
   return textures;
 }
 
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
   return {
-    main: loadTextureSet(archive, map.mainTextures),
-    left: loadTextureSet(archive, map.leftTextures),
-    right: loadTextureSet(archive, map.rightTextures),
+    // Wall/decoration art can have a colorkey background (verified against
+    // LES1A21A.PCX); floor/ceiling strips are always full-bleed.
+    main: loadTextureSet(archive, map.mainTextures, 'corner'),
+    left: loadTextureSet(archive, map.leftTextures, 'corner'),
+    right: loadTextureSet(archive, map.rightTextures, 'corner'),
     floor: loadTextureSet(archive, map.floorTextures),
     ceil: loadTextureSet(archive, map.ceilTextures),
   };
