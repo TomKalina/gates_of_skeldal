@@ -13,6 +13,19 @@ function getAppRoot(): HTMLElement {
 
 const app = getAppRoot();
 
+// Dev convenience: vite.config.ts serves the developer's own local
+// data/SKELDAL.DDL at this path (dev server only, never in a production
+// build). Falls back to the manual file picker when it's not there.
+async function tryAutoLoadDDL(): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch('/dev-data/SKELDAL.DDL');
+    if (!res.ok) return null;
+    return await res.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
 function showLoadPrompt(): Promise<void> {
   return new Promise((resolve) => {
     app.replaceChildren();
@@ -29,10 +42,17 @@ function showLoadPrompt(): Promise<void> {
   });
 }
 
-async function loadMenuAssets(): Promise<MainMenuAssets> {
+async function getDDLBuffer(): Promise<ArrayBuffer> {
+  const auto = await tryAutoLoadDDL();
+  if (auto) return auto;
+
   await showLoadPrompt();
   const file = await pickDDLFile();
-  const archive = openDDLArchive(await file.arrayBuffer());
+  return file.arrayBuffer();
+}
+
+async function loadMenuAssets(): Promise<MainMenuAssets> {
+  const archive = openDDLArchive(await getDDLBuffer());
 
   const backgroundRaw = archive.extract('MAINMENU.PCX');
   const logoRaw = archive.extract('LOGO00.PCX');

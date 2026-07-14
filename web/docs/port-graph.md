@@ -20,11 +20,14 @@ parity vs C build where applicable). Updated as issues close.
   platform kernel (#7) and graphics lib (#8) exist. It uses a plain Canvas2D
   context and a hardcoded 5-way band split standing in for the real per-pixel
   `MENUVOL5.PCX` hotspot mask. Real `MAINMENU.PCX`/`LOGO00.PCX` art is decoded
-  and drawn (via `src/formats/ddl-archive.ts` + `src/codecs/pcx.ts`) once the
-  user picks their own `SKELDAL.DDL` through a plain `<input type=file>`
-  (`src/platform/asset-source.ts` — a minimal precursor to the real OPFS-backed
-  intake screen in #2). Replace the band-split hit-test and the ad hoc file
-  picker when #2/#8 land.
+  and drawn (via `src/formats/ddl-archive.ts` + `src/codecs/pcx.ts`). In dev,
+  `vite.config.ts` serves the developer's own `data/SKELDAL.DDL` at
+  `/dev-data/SKELDAL.DDL` (dev server only, never bundled into a build) and
+  `main.ts` auto-fetches it on load — no click needed. Falls back to a plain
+  `<input type=file>` prompt (`src/platform/asset-source.ts`) when that route
+  404s, which is also the only path in a real deployment until the real
+  OPFS-backed intake screen (#2) lands. Replace the band-split hit-test and
+  the fallback file picker when #2/#8 land.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
