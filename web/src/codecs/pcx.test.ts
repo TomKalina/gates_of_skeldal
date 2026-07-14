@@ -41,4 +41,14 @@ describe('decodePcx', () => {
     expect(pixel(0, 1)).toEqual([40, 50, 60, 255]);
     expect(pixel(1, 1)).toEqual([70, 80, 90, 255]);
   });
+
+  it('zeroes alpha for the given transparentIndex, leaving other pixels opaque', () => {
+    const image = decodePcx(buildPcx(), { transparentIndex: 1 });
+    const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
+
+    expect(alpha(0, 0)).toBe(0);
+    expect(alpha(1, 0)).toBe(0);
+    expect(alpha(0, 1)).toBe(255);
+    expect(alpha(1, 1)).toBe(255);
+  });
 });

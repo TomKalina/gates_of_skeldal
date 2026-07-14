@@ -28,6 +28,29 @@ parity vs C build where applicable). Updated as issues close.
   404s, which is also the only path in a real deployment until the real
   OPFS-backed intake screen (#2) lands. Replace the band-split hit-test and
   the fallback file picker when #2/#8 land.
+- Character creation (`src/game/character-creation.ts`) merges chargen.c's two
+  pages (portrait+wheel, then a full parchment character sheet) into one
+  screen, and simplifies several things deliberately:
+  - Uses a native `<input>` for the name field and `window.confirm` for the
+    cancel prompt instead of the real GUI toolkit (#8/#9) and the exact
+    `message()` dialog wording.
+  - Button hit-testing is plain rects, not `CHARGENM.PCX`'s per-pixel mask —
+    same placeholder pattern as the main menu.
+  - Shows only the stats chargen.c itself rolls (STR/MAG/SPD/DEX, derived
+    HP/mana/stamina, level, bonus points) — not the full `inv_display_vlastnosti()`
+    character sheet (weapon skills, elemental resistances, food/water gauges),
+    which depends on the equipment/inventory system (#14).
+  - Party roster is append-only for now — no re-editing or deleting an
+    already-added member (`view_another_click2`'s roster-slot editing and
+    `gen_exit_editor`'s delete-mode aren't ported).
+  - **Real discovery, worth keeping in mind for other sprite work**: chargen.c's
+    `women[]`/`poradi[]` tables mean portrait-to-gender isn't a simple index
+    threshold — portrait file 1 is female even though files 2-4 aren't (see
+    `PORTRAIT_DISPLAY_ORDER` in `party.ts`). Also, sprite PCX files (`CHARxx.PCX`)
+    use palette index 0 as a colorkey-transparent background (verified against
+    the real `CHAR00.PCX`: index 0 is pure blue `(0,0,255)` and ~61% of pixels)
+    — `decodePcx()` takes an opt-in `transparentIndex` option for this since
+    plain background art has no such convention.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -53,7 +76,7 @@ parity vs C build where applicable). Updated as issues close.
 | `clk_map.c` | mouse click-region dispatch | `src/game/clickmap.ts` | pending |
 | `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (placeholder slice, no assets/animation) |
 | `setup.c` | settings screens | `src/gui/settings.ts` | pending |
-| `chargen.c` | character generation | `src/game/chargen.ts` | pending |
+| `chargen.c` | character generation | `src/game/attribute-wheel.ts` (wheel math), `src/game/party.ts` (rolling/roster), `src/game/character-creation.ts` (screen) | in-progress, see note below |
 | `sndandmus.c` | game-side sound/music control | `src/audio/game-audio.ts` | pending |
 | `console.c` | debug console | `src/game/console.ts` | pending |
 | `gen_stringtable.c` | string table generation | `src/game/strings.ts` | pending |

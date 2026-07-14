@@ -1,8 +1,9 @@
 import { createScreenCanvas } from './platform/canvas-context';
 import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
+import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
 import { MENU_ITEMS } from './gui/menu-nav';
-import { openDDLArchive } from './formats/ddl-archive';
+import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { decodePcx, pcxToImageData } from './codecs/pcx';
 
 function getAppRoot(): HTMLElement {
@@ -42,24 +43,49 @@ function showLoadPrompt(): Promise<void> {
   });
 }
 
-async function getDDLBuffer(): Promise<ArrayBuffer> {
+async function getArchive(): Promise<DDLArchive> {
   const auto = await tryAutoLoadDDL();
-  if (auto) return auto;
+  if (auto) return openDDLArchive(auto);
 
   await showLoadPrompt();
   const file = await pickDDLFile();
-  return file.arrayBuffer();
+  return openDDLArchive(await file.arrayBuffer());
 }
 
-async function loadMenuAssets(): Promise<MainMenuAssets> {
-  const archive = openDDLArchive(await getDDLBuffer());
+function decodeIfPresent(archive: DDLArchive, name: string): ImageData | undefined {
+  const raw = archive.extract(name);
+  return raw ? pcxToImageData(decodePcx(raw)) : undefined;
+}
 
-  const backgroundRaw = archive.extract('MAINMENU.PCX');
-  const logoRaw = archive.extract('LOGO00.PCX');
-  return {
-    ...(backgroundRaw ? { background: pcxToImageData(decodePcx(backgroundRaw)) } : {}),
-    ...(logoRaw ? { logo: { image: pcxToImageData(decodePcx(logoRaw)), y: 56 } } : {}),
-  };
+function loadMenuAssets(archive: DDLArchive): MainMenuAssets {
+  const assets: MainMenuAssets = {};
+  const background = decodeIfPresent(archive, 'MAINMENU.PCX');
+  if (background) assets.background = background;
+  const logoImage = decodeIfPresent(archive, 'LOGO00.PCX');
+  if (logoImage) assets.logo = { image: logoImage, y: 56 };
+  return assets;
+}
+
+function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAssets {
+  const assets: CharacterCreationAssets = {};
+  const topbar = decodeIfPresent(archive, 'TOPBAR_P.PCX');
+  if (topbar) assets.topbar = topbar;
+  const deskPanel = decodeIfPresent(archive, 'POSTAVY.PCX');
+  if (deskPanel) assets.deskPanel = deskPanel;
+  const pearl = decodeIfPresent(archive, 'PERLA.PCX');
+  if (pearl) assets.pearl = pearl;
+  const arch = decodeIfPresent(archive, 'IOBLOUK.PCX');
+  if (arch) assets.arch = arch;
+
+  const bodySprites = new Map<number, ImageData>();
+  for (let i = 0; i < 8; i++) {
+    const name = `CHAR${i.toString(16).padStart(2, '0').toUpperCase()}.PCX`;
+    const raw = archive.extract(name);
+    if (raw) bodySprites.set(i, pcxToImageData(decodePcx(raw, { transparentIndex: 0 })));
+  }
+  if (bodySprites.size > 0) assets.bodySprites = bodySprites;
+
+  return assets;
 }
 
 function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
@@ -72,12 +98,26 @@ function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
 }
 
 async function boot(): Promise<void> {
-  const assets = await loadMenuAssets();
+  const archive = await getArchive();
+  const menuAssets = loadMenuAssets(archive);
+  const chargenAssets = loadCharacterCreationAssets(archive);
   const ctx = createScreenCanvas(app);
 
   for (;;) {
-    const { choice } = runMainMenu(ctx, assets);
+    const { choice } = runMainMenu(ctx, menuAssets);
     const selected = await choice;
+
+    if (selected === 0) {
+      const { result } = runCharacterCreation(ctx, chargenAssets);
+      const party = await result;
+      if (party) {
+        const names = party.map((member) => member.name).join(', ');
+        showPlaceholder(ctx, `Party created: ${names} — dungeon not implemented yet`);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      continue;
+    }
+
     showPlaceholder(ctx, `${MENU_ITEMS[selected]} — not implemented yet`);
     await new Promise((resolve) => setTimeout(resolve, 1200));
   }
