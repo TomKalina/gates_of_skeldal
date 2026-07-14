@@ -15,6 +15,12 @@ parity vs C build where applicable). Updated as issues close.
   (`libs/event.c`, `platform/legacy_coroutines.cpp`); TS equivalent is issue #7.
 - ~120 extern mutable globals in `game/globals.h` carry game state; the TS port
   consolidates them into explicit state objects (issue #11).
+- Early vertical slice (`src/game/main-menu.ts`) jumps ahead of strict issue
+  order to get a click/keyboard-navigable main menu on screen before the real
+  platform kernel (#7), graphics lib (#8) and PCX/mask assets (#5) exist. It
+  uses a plain Canvas2D context and a hardcoded 5-way band split standing in
+  for the real per-pixel `MENUVOL5.PCX` hotspot mask. Replace both when #8
+  (bgraph/RGB555 presenter) and #5 (image codecs) land.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -38,7 +44,7 @@ parity vs C build where applicable). Updated as issues close.
 | `kniha.c` | story book renderer | `src/game/book.ts` | pending |
 | `interfac.c` | GUI widgets, message boxes, BFS pathfinder | `src/gui/interfac.ts` | pending |
 | `clk_map.c` | mouse click-region dispatch | `src/game/clickmap.ts` | pending |
-| `menu.c` | main menu | `src/gui/mainmenu.ts` | pending |
+| `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (placeholder slice, no assets/animation) |
 | `setup.c` | settings screens | `src/gui/settings.ts` | pending |
 | `chargen.c` | character generation | `src/game/chargen.ts` | pending |
 | `sndandmus.c` | game-side sound/music control | `src/audio/game-audio.ts` | pending |
