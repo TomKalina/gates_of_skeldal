@@ -112,23 +112,28 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
 function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
-  transparentIndex?: 'corner',
+  transparentIndex?: number,
 ): ReadonlyMap<number, ImageData> {
   const textures = new Map<number, ImageData>();
   names.forEach((name, i) => {
     const raw = archive.extract(name);
-    if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw, transparentIndex ? { transparentIndex } : {})));
+    if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw, transparentIndex !== undefined ? { transparentIndex } : {})));
   });
   return textures;
 }
 
+// Wall/decoration textures (main + side sets) reserve palette index 1 as a
+// colorkey background — verified across 102 real textures in LESPRED.MAP:
+// index 1's share is either exactly 0% (unused, full-bleed art) or >11%
+// (clearly the reserved background), never in between. Floor/ceiling strips
+// don't use this convention (confirmed full-bleed).
+const WALL_TRANSPARENT_INDEX = 1;
+
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
   return {
-    // Wall/decoration art can have a colorkey background (verified against
-    // LES1A21A.PCX); floor/ceiling strips are always full-bleed.
-    main: loadTextureSet(archive, map.mainTextures, 'corner'),
-    left: loadTextureSet(archive, map.leftTextures, 'corner'),
-    right: loadTextureSet(archive, map.rightTextures, 'corner'),
+    main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX),
+    left: loadTextureSet(archive, map.leftTextures, WALL_TRANSPARENT_INDEX),
+    right: loadTextureSet(archive, map.rightTextures, WALL_TRANSPARENT_INDEX),
     floor: loadTextureSet(archive, map.floorTextures),
     ceil: loadTextureSet(archive, map.ceilTextures),
   };

@@ -68,28 +68,34 @@ parity vs C build where applicable). Updated as issues close.
     read of `engine1.c`). Front wall: `drawImage` into the depth-scaled rect,
     same as `show_cel2`. Side walls: a `ctx.clip()` trapezoid (matching the
     shape `show_cel`'s `yss`/`ysd` skew produces) with the real texture
-    `drawImage`-stretched into its bounding box. Floor/ceiling: a handful of
-    depth-banded trapezoids, each sampling a proportional horizontal slice of
-    the (tall, pre-authored-as-a-strip) floor/ceiling texture — an
-    approximation of `fcdraw`'s true per-scanline `T_FLOOR_MAP`/`T_CEIL_MAP`
-    tables, not a literal port of them. **The floor and ceiling strips are
-    sampled in opposite directions** — verified by decoding and looking at
-    the real textures directly: floor art (e.g. `LES1F01A.PCX`) has its
-    near/detailed content at the bottom of the file and hazy/far content at
-    the top, while ceiling art (e.g. `LES1C01A.PCX`) is the mirror image
-    (wide/near beams at the top of the file, converging to a dark far
-    vanishing point at the bottom) — don't copy-paste one sampling formula
-    for both.
-  - Resolved: the "green/yellow wedge at depth-transition seams" noted below
-    was this same colorkey-background bug, just on wall/side textures whose
-    background happened to be a different color. `decodePcx()`'s
-    `transparentIndex: 'corner'` mode (auto-detect from the top-left pixel,
-    only applied if it's dominant enough to actually be a background fill —
-    see `pcx.ts`) is now used for the main/left/right wall texture sets.
-    Confirmed against the real `LES1A21A.PCX` (a window/shelf decoration
-    whose background is index 1, olive green, not the index-0-blue
-    convention from the character sprites) — the color varies per asset, so
-    this can't be a single hardcoded constant.
+    `drawImage`-stretched into its bounding box.
+  - Floor/ceiling: **not** depth-banded (an earlier version of this file
+    sliced the texture into per-depth strips, on the assumption it was a
+    tall perspective-encoded strip — wrong; decoding and looking at the real
+    art, e.g. `LES1C01A.PCX`, showed a small *repeating* tile pattern, not a
+    depth gradient). Now just the nearest cell's whole floor/ceiling texture
+    stretched once over its entire screen region — simpler and correct for
+    a repeating pattern. A faithful port of `fcdraw`'s true per-scanline
+    `T_FLOOR_MAP`/`T_CEIL_MAP` tables (which do vary the source per row) is
+    future work, and would also need to blend across cells with different
+    floor/ceiling textures at different depths, which this doesn't.
+  - Wall/decoration textures (main + side sets) reserve **palette index 1**
+    as a colorkey-transparent background — confirmed with a pixel-count
+    survey across all 102 real wall textures in `LESPRED.MAP`: index 1's
+    share is either exactly 0% (unused, full-bleed art) or >11% (clearly a
+    reserved background fill), never in between, so `decodePcx(...,
+    {transparentIndex: 1})` is always safe to apply to these sets — no
+    per-image heuristic needed. (Two earlier, more complicated attempts —
+    "use the corner pixel's index", "use whichever index is globally most
+    frequent" — both broke on real textures: the corner pixel isn't always
+    background, e.g. `LES1W11B.PCX`; and full-bleed art can have an
+    unrelated color be its single most frequent index at a similar or higher
+    percentage than a real colorkey background, e.g. `LES1W01A.PCX`'s
+    dominant shadow color at 23.8%. A texture-category-specific fixed index,
+    verified against a large real sample, was more robust than any
+    per-image inference.) This is a *different* index from the character
+    sprites' colorkey (index 0) — the reserved slot is a per-asset-category
+    convention, not a single global constant.
   - View-stopping uses `SD_PRIM_VIS` (is a wall texture rendered here) as a
     simple "opaque wall" test; the original also has door/arch/see-through
     nuance (`SD_LEFT_ARC`/`SD_RIGHT_ARC`, double-sided walls) this doesn't
