@@ -84,10 +84,41 @@ parity vs C build where applicable). Updated as issues close.
   simplifications from `engine1.c`/`engine2.c`/`builder.c`:
   - The original's "zoom tables" are a precomputed axis-aligned scaled-rect
     blit per depth/column (confirmed by reading `calc_points`/`create_tables`
-    and the `sikma_*` blitters) — **not** raycasting — so `computeViewCells` +
-    a geometric per-depth scale factor (`DEPTH_SCALE`) into `drawImage` is a
+    and the `sikma_*` blitters) — **not** raycasting — so `computeVisibleGrid`
+    + a geometric per-depth scale factor (`DEPTH_SCALE`) into `drawImage` is a
     structurally faithful port of the technique, just without the exact DOS
-    pixel-stride tables.
+    pixel-stride tables. `DEPTH_SCALE` is now the real derived constant
+    (`1 - 1/FACTOR_3D`, `FACTOR_3D=3.33` from `engine1.h`) — an earlier version
+    used an eyeballed `0.62` that was never actually checked against the
+    source.
+  - **Real bug, fixed**: the view used to be a single straight-ahead column
+    (depth only), stopping dead at the first side with any wall image drawn
+    on it (`SD_PRIM_VIS`). Reading `builder.c`'s `create_minimap`/
+    `crt_minimap_itr`/`render_scene` closely revealed the real renderer walks
+    a full 2D grid — depth **and** VIEW3D_X lateral columns — recursing
+    forward *and* sideways through any side flagged `SD_TRANSPARENT`,
+    independent of whether that side also draws a wall image
+    (`SD_PRIM_VIS`). Those are genuinely different questions: whether a wall
+    texture is painted on a side, and whether geometry continues to exist
+    and get computed past it — confirmed by `LESPRED.MAP`'s own start
+    sector, whose west wall renders an opaque-looking decorative bracket
+    sprite that's actually 61% colorkey-punched, with real sectors visible
+    both through its transparent gaps *and*, more importantly, sideways
+    through its transparent south/north sides (a window and an open
+    doorway) — sectors that were never being computed or drawn at all
+    before this fix. `computeVisibleGrid` in `dungeon.ts` now builds that
+    full grid, and `dungeon-view.ts` renders every cell in it (farthest
+    depth first, so nearer transparent walls' colorkey-punched holes reveal
+    already-painted farther geometry), using a closed-form scale-and-shift
+    for lateral position that mirrors `calc_points`'s per-depth recurrence
+    (every lateral cell shrinks by the same per-depth factor as the center
+    column, tiling edge-to-edge since each one starts exactly one
+    unshrunk-viewport-width apart). `computeViewCells` is kept as a
+    lateral-0-only wrapper for callers that don't need the full grid. Not
+    yet ported: the original's `enter_tab`/`enter` bookkeeping that bounds
+    how a lateral branch can re-cross back toward center (approximated here
+    as "a branch may not cross back past the center column once committed
+    to a side"), and `SD_LEFT_ARC`/`SD_RIGHT_ARC` door/arch nuance.
   - Every surface uses its real decoded texture (not a flat average color —
     an earlier version of this file oversimplified here after too shallow a
     read of `engine1.c`). Front wall: `drawImage` into the depth-scaled rect,
@@ -121,13 +152,11 @@ parity vs C build where applicable). Updated as issues close.
     per-image inference.) This is a *different* index from the character
     sprites' colorkey (index 0) — the reserved slot is a per-asset-category
     convention, not a single global constant.
-  - View-stopping uses `SD_PRIM_VIS` (is a wall texture rendered here) as a
-    simple "opaque wall" test; the original also has door/arch/see-through
-    nuance (`SD_LEFT_ARC`/`SD_RIGHT_ARC`, double-sided walls) this doesn't
-    model. Movement passability correctly uses the *different* flag
-    `SD_PLAY_IMPS` — verified against real map data that these two flags
-    disagree on some sides (e.g. a side can render a wall image while still
-    being non-blocking, or vice versa).
+  - Movement passability uses the *different* flag `SD_PLAY_IMPS`, not
+    `SD_PRIM_VIS` or `SD_TRANSPARENT` — verified against real map data that
+    all three of these flags can disagree on a given side (e.g. a side can
+    render a wall image, or be visually see-through, while still blocking
+    movement, or vice versa in either direction).
   - No smooth step/turn animation (`step_zoom`/`turn_zoom` in `realgame.c`) —
     moves and turns are instant. No items/mobs/niches/macros; those blocks
     are parsed only far enough to skip past in the file (`A_MAPITEM`,
@@ -149,17 +178,27 @@ parity vs C build where applicable). Updated as issues close.
     texture" and falls through to the plain fallback fill instead.
   - Investigated the reference screenshot's floor-standing table (candle +
     quill + scroll) at length: no `STUL`/`STOL`/`TABLE`-named asset exists
-    anywhere in `SKELDAL.DDL`'s 2482 files, and the one niche
+    anywhere in `SKELDAL.DDL`'s 2482 files, the one niche
     (`A_MAPVYK`/`TVYKLENEK`) attached to the starting sector only holds a
-    single small scroll icon. The starting sector's own front wall (facing
-    the map's real `start_direction`) is a real, correctly-transparent
+    single small scroll icon, and directly decoding/viewing every candidate
+    wall texture in the start sector's vicinity (`LES1W10A`, `LES1W11A`,
+    `LES1W05A.PCX`) shows plain wood paneling, no table motif painted into
+    any of them either. The 2D lateral-visibility fix above did resolve the
+    *room shape* — the reference's window-left/bookshelf-right composite
+    now renders correctly, since both are visible sideways through the
+    start sector's transparent south/north sides, not from walking further
+    into the map as first assumed — but the literal table object itself is
+    still unaccounted for. The starting sector's own front wall (facing the
+    map's real `start_direction`) is a real, correctly-transparent
     decorative texture (`LES1A23A.PCX`, a wall-mounted bracket with a
     dangling candle-like ornament) sitting in the *same* main-texture slot
     ordinary plain walls use — i.e. this is intentional set dressing baked
-    into the map, not a rendering bug — and a window + a bookshelf (matching
-    other elements from the reference screenshot) are both one sector away.
-    Whether the reference screenshot's exact table framing is a different
-    camera step or a different map entirely remains unresolved.
+    into the map, not a rendering bug — but it doesn't match the reference's
+    front-center view at all (which shows plain wall, no red backing),
+    suggesting the reference's exact camera framing still isn't identical to
+    this port's start position/direction, or the table is a placed-item
+    system (`draw_placed_items_normal`/`draw_mob`) this port hasn't
+    implemented at all yet. Remains unresolved.
   - **Real dungeon UI chrome**, added against a reference screenshot showing
     the actual top/bottom bars: the top status bar is one real asset,
     `TOPBAR.PCX` (640x16 — button/icon x-boundaries measured directly off it

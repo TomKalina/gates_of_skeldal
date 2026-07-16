@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { SD_PLAY_IMPS, SD_PRIM_VIS, type DungeonMap, type MapSide } from '../formats/map-file';
-import { behind, canStep, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
+import { SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
+import { behind, canStep, computeVisibleGrid, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
   return { prim, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 };
 }
+// A real open passage is also SD_TRANSPARENT — verified against LESPRED.MAP,
+// where every side with no wall image (SD_PRIM_VIS unset) also has this bit
+// set, since visibility past an open side is gated by SD_TRANSPARENT, not
+// SD_PRIM_VIS (see dungeon.ts's computeVisibleGrid).
 function open(): MapSide {
-  return { prim: 0, sec: 0, flags: 0, primAnim: 0, secAnim: 0 };
+  return { prim: 0, sec: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0 };
 }
 
 // A 2-sector corridor: sector 0 (start, facing East) is open east into
@@ -58,8 +62,8 @@ describe('computeViewCells', () => {
     const cells = computeViewCells(map, 0, 1);
 
     expect(cells).toHaveLength(2);
-    expect(cells[0]).toMatchObject({ depth: 0, sector: 0, frontWallTexture: null, leftWallTexture: 5, rightWallTexture: 6 });
-    expect(cells[1]).toMatchObject({ depth: 1, sector: 1, frontWallTexture: 9, leftWallTexture: 8, rightWallTexture: 10 });
+    expect(cells[0]).toMatchObject({ depth: 0, lateral: 0, sector: 0, frontWallTexture: null, leftWallTexture: 5, rightWallTexture: 6 });
+    expect(cells[1]).toMatchObject({ depth: 1, lateral: 0, sector: 1, frontWallTexture: 9, leftWallTexture: 8, rightWallTexture: 10 });
   });
 
   it('adds the primAnim upper-nibble animation-frame offset to the texture index', () => {
@@ -71,6 +75,32 @@ describe('computeViewCells', () => {
 
     const cells = computeViewCells(animatedMap, 0, 1);
     expect(cells[0]?.frontWallTexture).toBe(5 + 2);
+  });
+});
+
+describe('computeVisibleGrid', () => {
+  it('sees sideways through a transparent side into an adjacent sector', () => {
+    // Facing East (1): dirs[0]=North (left), dirs[2]=South (right). Sector
+    // 0's north side is open into sector 2 — a real map's window or open
+    // doorway would let you see that sector laterally, at the same depth,
+    // the same way LESPRED.MAP's start sector reveals a sector to the side
+    // through its transparent south window.
+    const map = buildTestMap();
+    const lateralMap: DungeonMap = {
+      ...map,
+      sectors: map.sectors.map((s, i) => (i === 0 ? { ...s, stepNext: [2, 1, 0, 0] as const } : s)).concat({
+        floor: 1,
+        ceil: 1,
+        sectorType: 1,
+        stepNext: [0, 0, 0, 0],
+      }),
+      // sector 0's north side, now open (transparent) and leading sideways to sector 2
+      sides: map.sides.map((s, i) => (i === 0 ? open() : s)).concat(wall(20), wall(21), wall(22), wall(23)),
+    };
+
+    const grid = computeVisibleGrid(lateralMap, 0, 1);
+    const lateralCell = grid.find((cell) => cell.lateral === -1);
+    expect(lateralCell).toMatchObject({ depth: 0, sector: 2 });
   });
 });
 

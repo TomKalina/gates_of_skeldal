@@ -1,4 +1,4 @@
-import { SD_PLAY_IMPS, SD_PRIM_VIS, sideAt, type DungeonMap } from '../formats/map-file';
+import { SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -48,6 +48,11 @@ export function stepBackward(state: DungeonState): DungeonState {
 
 export interface ViewCell {
   depth: number;
+  // 0 = straight ahead, negative = left of center, positive = right —
+  // engine1.h's VIEW3D_X lateral grid (create_minimap/crt_minimap_itr),
+  // collapsed the same way depth already is: a closed-form scale-and-shift
+  // instead of the DOS per-cell pixel tables (calc_points).
+  lateral: number;
   sector: number;
   frontWallTexture: number | null;
   leftWallTexture: number | null;
@@ -56,8 +61,9 @@ export interface ViewCell {
   ceilTexture: number;
 }
 
-// VIEW3D_Z in engine1.h — current cell plus 4 ahead.
+// VIEW3D_Z/VIEW3D_X in engine1.h.
 export const MAX_VIEW_DEPTH = 5;
+export const MAX_LATERAL = 4;
 
 // draw_basic_sector: the texture actually shown is `q->prim + (q->prim_anim
 // >> 4)`, not prim alone — the upper nibble of prim_anim is an animation
@@ -71,36 +77,84 @@ function visibleTexture(side: ReturnType<typeof sideAt>): number | null {
   return side.prim + (side.primAnim >> 4);
 }
 
-// Mirrors builder.c's per-cell wall pick (draw_basic_sector) and the
-// minimap traversal that stops the view at the first blocking front wall —
-// simplified to treat any rendered front wall as fully opaque (the original
-// distinguishes see-through arches/doors via additional flags this MVP
-// doesn't model).
-export function computeViewCells(map: DungeonMap, startSector: number, facing: Direction): ViewCell[] {
+// builder.c's crt_minimap_itr: both forward AND sideways visibility are
+// gated by SD_TRANSPARENT, NOT SD_PRIM_VIS. These are genuinely different
+// questions — "is a wall image drawn on this side" (SD_PRIM_VIS) vs "does
+// geometry continue to exist and get computed beyond this side"
+// (SD_TRANSPARENT) — and a side can answer both at once: verified against
+// LESPRED.MAP's start sector, whose west wall renders an opaque-looking
+// decorative bracket sprite that's actually 61% colorkey-punched, with a
+// second, ordinary wall one sector further west showing through the gaps.
+// Previously this MVP conflated the two (stopped the whole cell chain the
+// moment any wall image appeared), which is why that second wall — and,
+// more importantly, the sectors visible sideways through transparent
+// doors/windows/open walls — never got computed or drawn at all.
+function isTransparent(side: ReturnType<typeof sideAt>): boolean {
+  return side !== undefined && (side.flags & SD_TRANSPARENT) !== 0;
+}
+
+// Mirrors create_minimap/crt_minimap_itr: a depth-and-lateral grid of every
+// sector visible from startSector while facing `facing`, built by
+// recursing forward through transparent front sides and sideways through
+// transparent left/right sides. dirs (left/front/right) are fixed for the
+// whole traversal, exactly like the original's dirs[] — every sector in
+// the grid is viewed using the same absolute compass directions, not
+// re-derived per-sector. The original also tracks an `enter`/`enter_tab`
+// state to bound how a lateral branch can re-cross back toward center;
+// approximated here as "a branch may not cross back past the center
+// column once committed to a side," which is simpler but keeps the same
+// no-zigzag intent.
+export function computeVisibleGrid(map: DungeonMap, startSector: number, facing: Direction): ViewCell[] {
+  const dirs = [turnLeft(facing), facing, turnRight(facing)] as const;
   const cells: ViewCell[] = [];
-  let sector = startSector;
+  const seen = new Set<string>();
 
-  for (let depth = 0; depth < MAX_VIEW_DEPTH; depth++) {
+  function visit(sector: number, depth: number, lateral: number): void {
+    if (depth >= MAX_VIEW_DEPTH || lateral < -MAX_LATERAL || lateral > MAX_LATERAL) return;
+    const key = `${depth}:${lateral}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
     const sectorData = map.sectors[sector];
-    if (!sectorData) break;
+    if (!sectorData) return;
 
-    const frontWallTexture = visibleTexture(sideAt(map, sector, facing));
-    const leftWallTexture = visibleTexture(sideAt(map, sector, turnLeft(facing)));
-    const rightWallTexture = visibleTexture(sideAt(map, sector, turnRight(facing)));
+    const leftSide = sideAt(map, sector, dirs[0]);
+    const frontSide = sideAt(map, sector, dirs[1]);
+    const rightSide = sideAt(map, sector, dirs[2]);
 
     cells.push({
       depth,
+      lateral,
       sector,
-      frontWallTexture,
-      leftWallTexture,
-      rightWallTexture,
+      frontWallTexture: visibleTexture(frontSide),
+      leftWallTexture: visibleTexture(leftSide),
+      rightWallTexture: visibleTexture(rightSide),
       floorTexture: sectorData.floor,
       ceilTexture: sectorData.ceil,
     });
 
-    if (frontWallTexture !== null) break;
-    sector = sectorData.stepNext[facing];
+    if (isTransparent(frontSide)) {
+      const next = sectorData.stepNext[dirs[1]];
+      if (next !== undefined) visit(next, depth + 1, lateral);
+    }
+    if (lateral <= 0 && isTransparent(leftSide)) {
+      const next = sectorData.stepNext[dirs[0]];
+      if (next !== undefined) visit(next, depth, lateral - 1);
+    }
+    if (lateral >= 0 && isTransparent(rightSide)) {
+      const next = sectorData.stepNext[dirs[2]];
+      if (next !== undefined) visit(next, depth, lateral + 1);
+    }
   }
 
+  visit(startSector, 0, 0);
   return cells;
+}
+
+// Backward-compatible straight-ahead-only view for callers that don't need
+// the lateral grid.
+export function computeViewCells(map: DungeonMap, startSector: number, facing: Direction): ViewCell[] {
+  return computeVisibleGrid(map, startSector, facing)
+    .filter((cell) => cell.lateral === 0)
+    .sort((a, b) => a.depth - b.depth);
 }

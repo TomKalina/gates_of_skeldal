@@ -1,4 +1,4 @@
-import { computeViewCells, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type ViewCell } from './dungeon';
+import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type ViewCell } from './dungeon';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
 
@@ -42,13 +42,14 @@ const BOTTOM_BAR_HEIGHT = 102;
 const VIEWPORT = { x: 0, y: TOPBAR_HEIGHT, width: 640, height: 480 - TOPBAR_HEIGHT - BOTTOM_BAR_HEIGHT };
 const BOTTOM_BAR = { x: 0, y: 480 - BOTTOM_BAR_HEIGHT, width: 640, height: BOTTOM_BAR_HEIGHT };
 
-// engine1.c's calc_points() builds its whole perspective grid the same way:
-// each depth's x/y is the previous depth's x/y minus x/FACTOR_3D — a
-// geometric shrink toward the vanishing point. This is that same recurrence
-// collapsed into a closed-form scale factor per depth (the DOS zoom tables
-// then resample textures into these rects — see show_cel/show_cel2 — which
-// is exactly what drawImage's dest-rect scaling does).
-const DEPTH_SCALE = 0.62;
+// engine1.c's calc_points(): viewport_geometry[j][0/1][i].{x,y} recur as
+// `x -= x/FACTOR_3D` per depth i, for every lateral boundary j — i.e. every
+// lateral column shrinks by the exact same per-depth factor as the center
+// one, just starting from a different x offset. FACTOR_3D is 3.33 in
+// engine1.h, so the real per-depth shrink is `1 - 1/3.33`; that's the
+// actual constant (replacing an earlier eyeballed 0.62 that was never
+// checked against the source).
+const DEPTH_SCALE = 1 - 1 / 3.33;
 
 interface Rect {
   x: number;
@@ -57,12 +58,18 @@ interface Rect {
   height: number;
 }
 
-function rectAtDepth(depth: number): Rect {
+// calc_points() also starts each lateral boundary j at `START_X1 +
+// 2*START_X1*j` — i.e. exactly one full (unshrunk) viewport-width apart —
+// so lateral cells at a given depth tile edge-to-edge with the same shrink
+// factor as depth, never overlapping and never gapping. `lateral` here is
+// VIEW3D_X's signed cell index (0 = straight ahead), not a boundary index.
+function rectAtDepthLateral(depth: number, lateral: number): Rect {
   const scale = DEPTH_SCALE ** depth;
   const width = VIEWPORT.width * scale;
   const height = VIEWPORT.height * scale;
+  const centerX = VIEWPORT.x + VIEWPORT.width / 2 + lateral * VIEWPORT.width * scale;
   return {
-    x: VIEWPORT.x + (VIEWPORT.width - width) / 2,
+    x: centerX - width / 2,
     y: VIEWPORT.y + (VIEWPORT.height - height) / 2,
     width,
     height,
@@ -169,8 +176,8 @@ export function runDungeonView(
     resolveResult = resolve;
   });
 
-  function drawFloorAndCeiling(nearestCell: ViewCell, totalDepths: number): void {
-    const horizon = rectAtDepth(totalDepths);
+  function drawFloorAndCeiling(nearestCell: ViewCell, centerColumnDepth: number): void {
+    const horizon = rectAtDepthLateral(centerColumnDepth, 0);
 
     const ceilImage = textures.ceil.get(nearestCell.ceilTexture);
     const ceilHeight = horizon.y - VIEWPORT.y;
@@ -220,14 +227,35 @@ export function runDungeonView(
     ctx.restore();
   }
 
-  function drawSideWalls(cell: ViewCell, depth: number): void {
-    const near = rectAtDepth(depth);
-    const far = rectAtDepth(depth + 1);
-    if (cell.leftWallTexture !== null) {
+  // draw_basic_sector only draws a cell's LEFT wall `if (celx<=0)` and its
+  // RIGHT wall `if (celx>=0)` — a cell strictly right of center never draws
+  // the wall facing back toward the center column (and vice versa), since
+  // that face isn't meant to be visible from this viewing angle.
+  function drawSideWalls(cell: ViewCell): void {
+    const near = rectAtDepthLateral(cell.depth, cell.lateral);
+    const far = rectAtDepthLateral(cell.depth + 1, cell.lateral);
+    if (cell.lateral <= 0 && cell.leftWallTexture !== null) {
       drawSideWall(near, far, 'left', textures.left.get(cell.leftWallTexture));
     }
-    if (cell.rightWallTexture !== null) {
+    if (cell.lateral >= 0 && cell.rightWallTexture !== null) {
       drawSideWall(near, far, 'right', textures.right.get(cell.rightWallTexture));
+    }
+  }
+
+  // Drawn for every cell that has one, not just the last of a chain — a
+  // side can render a wall image while still being SD_TRANSPARENT (e.g.
+  // this map's start sector: a decorative bracket sprite that's 61%
+  // colorkey-punched), in which case farther geometry was already painted
+  // behind it by the time this runs and shows through the gaps.
+  function drawFrontWall(cell: ViewCell): void {
+    if (cell.frontWallTexture === null) return;
+    const rect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
+    const image = textures.main.get(cell.frontWallTexture);
+    if (image) {
+      ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+    } else {
+      ctx.fillStyle = '#553';
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
   }
 
@@ -331,21 +359,18 @@ export function runDungeonView(
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const cells = computeViewCells(state.map, state.sector, state.direction);
-    const nearestCell = cells[0];
-    if (nearestCell) drawFloorAndCeiling(nearestCell, cells.length);
-    for (let i = cells.length - 1; i >= 0; i--) drawSideWalls(cells[i]!, i);
+    const grid = computeVisibleGrid(state.map, state.sector, state.direction);
 
-    const lastCell = cells[cells.length - 1];
-    if (lastCell && lastCell.frontWallTexture !== null) {
-      const rect = rectAtDepth(cells.length);
-      const image = textures.main.get(lastCell.frontWallTexture);
-      if (image) {
-        ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
-      } else {
-        ctx.fillStyle = '#553';
-        ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      }
+    const centerColumn = grid.filter((cell) => cell.lateral === 0).sort((a, b) => a.depth - b.depth);
+    const nearestCell = centerColumn[0];
+    if (nearestCell) drawFloorAndCeiling(nearestCell, centerColumn.length);
+
+    // Farthest first, so a nearer transparent wall's colorkey-punched gaps
+    // reveal whatever farther geometry was already painted behind it.
+    const byDepthDescending = [...grid].sort((a, b) => b.depth - a.depth);
+    for (const cell of byDepthDescending) {
+      drawSideWalls(cell);
+      drawFrontWall(cell);
     }
 
     drawTopBar();
