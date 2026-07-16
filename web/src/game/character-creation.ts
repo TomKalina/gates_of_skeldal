@@ -17,6 +17,7 @@ import {
   type PrimaryStat,
 } from './party';
 import { canvasRectToClientRect, clientToCanvasPoint } from '../platform/canvas-transform';
+import { faceThumbnail as sharedFaceThumbnail, imageDataToCanvas } from './portraits';
 
 // chargen.c displays its 8 portraits in this file-index order (poradi[]) —
 // see party.ts's PORTRAIT_DISPLAY_ORDER comment for why this isn't 0..7.
@@ -98,45 +99,12 @@ function rectContains(rect: { x: number; y: number; width: number; height: numbe
   return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 }
 
-// putImageData() can't scale, but the roster box needs the body-sprite
-// ImageData drawn into a much smaller thumbnail — cache a same-size canvas
-// per sprite so drawImage() can scale it without re-uploading every frame
-// (draw() re-runs on every wheel-drag mousemove).
-const spriteCanvasCache = new WeakMap<ImageData, HTMLCanvasElement>();
-function imageDataToCanvas(data: ImageData): HTMLCanvasElement {
-  let canvas = spriteCanvasCache.get(data);
-  if (!canvas) {
-    canvas = document.createElement('canvas');
-    canvas.width = data.width;
-    canvas.height = data.height;
-    canvas.getContext('2d')?.putImageData(data, 0, 0);
-    spriteCanvasCache.set(data, canvas);
-  }
-  return canvas;
-}
-
 // The reference roster box shows a small bust/face crop, not the full-body
-// sprite — but no separate bust-portrait asset exists in the archive. The
-// face grid at the top of the select page is really just a fixed region of
-// the desk-panel background art (POSTAVY.PCX) at FACE_GRID's coordinates,
-// so the same pixels can be cropped out of assets.deskPanel and reused here.
-const faceCropCache = new Map<number, HTMLCanvasElement>();
+// sprite — but no separate bust-portrait asset exists in the archive. See
+// portraits.ts: it's really just a fixed region of the desk-panel
+// background art (POSTAVY.PCX), same pixels the face grid below uses.
 function faceThumbnail(assets: CharacterCreationAssets, portraitIndex: number): HTMLCanvasElement | undefined {
-  if (!assets.deskPanel) return undefined;
-  const cached = faceCropCache.get(portraitIndex);
-  if (cached) return cached;
-  const slot = PORTRAIT_DISPLAY_ORDER.indexOf(portraitIndex as (typeof PORTRAIT_DISPLAY_ORDER)[number]);
-  if (slot === -1) return undefined;
-  const localX = FACE_GRID.x - DESK.x + slot * FACE_GRID.step;
-  const localY = FACE_GRID.y - DESK.y;
-  const crop = document.createElement('canvas');
-  crop.width = FACE_GRID.hitWidth;
-  crop.height = FACE_GRID.height;
-  const c = crop.getContext('2d');
-  if (!c) return undefined;
-  c.drawImage(imageDataToCanvas(assets.deskPanel), localX, localY, FACE_GRID.hitWidth, FACE_GRID.height, 0, 0, FACE_GRID.hitWidth, FACE_GRID.height);
-  faceCropCache.set(portraitIndex, crop);
-  return crop;
+  return sharedFaceThumbnail(assets.deskPanel, portraitIndex);
 }
 
 // TS counterpart of chargen.c's enter_generator(): pick a portrait, drag the
