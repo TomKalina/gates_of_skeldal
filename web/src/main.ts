@@ -2,8 +2,9 @@ import { createScreenCanvas } from './platform/canvas-context';
 import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
 import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
-import { runDungeonView, type DungeonTextureSet } from './game/dungeon-view';
+import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet } from './game/dungeon-view';
 import type { Direction } from './game/dungeon';
+import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { parseMapFile, type DungeonMap } from './formats/map-file';
@@ -153,6 +154,41 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextu
   };
 }
 
+// SIPKY_S/J/Z/V.PCX (142x330) each stack 3 near-identical frames of the
+// D-pad with one arrow highlighted — only the first frame is used, there's
+// no meaningful animation to port here.
+function firstFrame(image: ImageData, frameHeight: number): ImageData {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const c = canvas.getContext('2d');
+  if (!c) throw new Error('2D canvas context unavailable');
+  c.putImageData(image, 0, 0);
+  return c.getImageData(0, 0, image.width, frameHeight);
+}
+
+function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | undefined): DungeonChromeAssets {
+  const assets: DungeonChromeAssets = {};
+  const topbar = decodeIfPresent(archive, 'TOPBAR.PCX');
+  if (topbar) assets.topbar = topbar;
+  const dpad = decodeIfPresent(archive, 'SIPKY.PCX');
+  if (dpad) assets.dpad = dpad;
+  // Filenames are Czech compass letters (Sever/Jih/Západ/Východ = N/S/W/E),
+  // but the art always draws north-up, so they map to screen position:
+  // S(north)=top=forward, J(south)=bottom=back, Z(west)=left=turn-left,
+  // V(east)=right=turn-right — see dungeon-view.ts's DPAD_QUADRANTS.
+  const hoverUp = decodeIfPresent(archive, 'SIPKY_S.PCX');
+  if (hoverUp) assets.dpadHoverUp = firstFrame(hoverUp, dpad?.height ?? 102);
+  const hoverDown = decodeIfPresent(archive, 'SIPKY_J.PCX');
+  if (hoverDown) assets.dpadHoverDown = firstFrame(hoverDown, dpad?.height ?? 102);
+  const hoverLeft = decodeIfPresent(archive, 'SIPKY_Z.PCX');
+  if (hoverLeft) assets.dpadHoverLeft = firstFrame(hoverLeft, dpad?.height ?? 102);
+  const hoverRight = decodeIfPresent(archive, 'SIPKY_V.PCX');
+  if (hoverRight) assets.dpadHoverRight = firstFrame(hoverRight, dpad?.height ?? 102);
+  if (deskPanel) assets.deskPanel = deskPanel;
+  return assets;
+}
+
 function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -162,17 +198,25 @@ function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
   ctx.fillText(message, 40, ctx.canvas.height / 2);
 }
 
-async function enterDungeon(ctx: CanvasRenderingContext2D, archive: DDLArchive): Promise<boolean> {
+async function enterDungeon(
+  ctx: CanvasRenderingContext2D,
+  archive: DDLArchive,
+  party: readonly Character[],
+  chrome: DungeonChromeAssets,
+): Promise<boolean> {
   const mapBuffer = await tryAutoLoadMap(START_MAP);
   if (!mapBuffer) return false;
 
   const map = parseMapFile(mapBuffer);
   const textures = loadDungeonTextures(archive, map);
-  runDungeonView(
+  const { result } = runDungeonView(
     ctx,
     { map, sector: map.startSector, direction: map.startDirection as Direction },
     textures,
+    party,
+    chrome,
   );
+  await result; // resolves when KONEC is clicked
   return true;
 }
 
@@ -180,6 +224,7 @@ async function boot(): Promise<void> {
   const archive = await getArchive();
   const menuAssets = loadMenuAssets(archive);
   const chargenAssets = loadCharacterCreationAssets(archive);
+  const dungeonChrome = loadDungeonChromeAssets(archive, chargenAssets.deskPanel);
   const ctx = createScreenCanvas(app);
 
   for (;;) {
@@ -190,10 +235,11 @@ async function boot(): Promise<void> {
       const { result } = runCharacterCreation(ctx, chargenAssets);
       const party = await result;
       if (party) {
-        if (await enterDungeon(ctx, archive)) return; // dungeon view has no exit yet
-        const names = party.map((member) => member.name).join(', ');
-        showPlaceholder(ctx, `Party created: ${names} — dungeon map unavailable`);
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (!(await enterDungeon(ctx, archive, party, dungeonChrome))) {
+          const names = party.map((member) => member.name).join(', ');
+          showPlaceholder(ctx, `Party created: ${names} — dungeon map unavailable`);
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
       }
       continue;
     }

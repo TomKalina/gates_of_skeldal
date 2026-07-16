@@ -160,6 +160,40 @@ parity vs C build where applicable). Updated as issues close.
     other elements from the reference screenshot) are both one sector away.
     Whether the reference screenshot's exact table framing is a different
     camera step or a different map entirely remains unresolved.
+  - **Real dungeon UI chrome**, added against a reference screenshot showing
+    the actual top/bottom bars: the top status bar is one real asset,
+    `TOPBAR.PCX` (640x16 — button/icon x-boundaries measured directly off it
+    by scanning for its bevel-highlight seam columns, not estimated from a
+    screenshot), with hit rects wired for KONEC (exits back to the main
+    menu — the view previously had no exit at all) and ULOŽ/OBNOV (see
+    below). NASTAVENÍ and the icon cells (fire/book/spell/food — presumably
+    light/spellbook/magic/inventory menus) have no hit rects yet since none
+    of those systems exist. The bottom bar shows one box per party member
+    (portrait crop from `POSTAVY.PCX` via `portraits.ts`, level number, 3
+    vertical resource bars, name strip) and the real D-pad art (`SIPKY.PCX`,
+    142x102 — confirmed by direct decode to be the same diamond-arrows-around
+    -a-skull control visible in the reference, not the compass rose the
+    chargen wheel uses). `SIPKY_S/J/Z/V.PCX` are the same image with one
+    arrow highlighted for mouse-hover feedback; their filenames are Czech
+    compass letters (Sever/Jih/Západ/Východ = N/S/W/E) but the art always
+    draws north-up, so they were mapped to *screen position*
+    (top/bottom/left/right) rather than compass direction, wired to the same
+    forward/back/turn-left/turn-right the arrow keys already used.
+    `KOMPAS.PCX` (a sprite sheet of single-letter N/S/E/W tiles) was a false
+    lead — it's some other direction-indicator, not this control.
+  - The 3 resource bars (HP/stamina/mana, orange/green/blue by inferred
+    convention) always read full — there's no combat/damage system yet to
+    drive them, so every party member is always at full health by
+    definition. The gold counter always reads 0 (no economy/loot system).
+    The chain-and-skull decorative column left of the party boxes (matches
+    the same still-missing asset noted for the chargen panel) is a flat
+    fill.
+  - ULOŽ/OBNOV are real, not stubs: a single implicit `localStorage` slot
+    holding just `{mapName, sector, direction}` — there's no save-slot
+    picker UI, and no inventory/combat state exists yet to persist beyond
+    position. Loading from the main menu isn't wired up (`Obnova pozice` on
+    the main menu still says "not implemented yet") — quick-save/quick-load
+    only works from inside an active dungeon session for now.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
