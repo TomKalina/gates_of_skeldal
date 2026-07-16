@@ -95,6 +95,8 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   if (pearl) assets.pearl = pearl;
   const arch = decodeIfPresent(archive, 'IOBLOUK.PCX');
   if (arch) assets.arch = arch;
+  const svitek = decodeIfPresent(archive, 'SVITEK.PCX');
+  if (svitek) assets.svitek = svitek;
 
   const bodySprites = new Map<number, ImageData>();
   for (let i = 0; i < 8; i++) {
