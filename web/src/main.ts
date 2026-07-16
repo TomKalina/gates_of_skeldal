@@ -71,9 +71,9 @@ async function getArchive(): Promise<DDLArchive> {
   return openDDLArchive(await file.arrayBuffer());
 }
 
-function decodeIfPresent(archive: DDLArchive, name: string): ImageData | undefined {
+function decodeIfPresent(archive: DDLArchive, name: string, transparentIndex?: number): ImageData | undefined {
   const raw = archive.extract(name);
-  return raw ? pcxToImageData(decodePcx(raw)) : undefined;
+  return raw ? pcxToImageData(decodePcx(raw, transparentIndex !== undefined ? { transparentIndex } : {})) : undefined;
 }
 
 function loadMenuAssets(archive: DDLArchive): MainMenuAssets {
@@ -91,7 +91,11 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   if (topbar) assets.topbar = topbar;
   const deskPanel = decodeIfPresent(archive, 'POSTAVY.PCX');
   if (deskPanel) assets.deskPanel = deskPanel;
-  const pearl = decodeIfPresent(archive, 'PERLA.PCX');
+  // Small sprite-style asset (17x17), same colorkey convention as CHAR*.PCX
+  // body sprites — verified by pixel-count survey: index 0 is 29% of the
+  // image (a pure red painted into that slot, not the blue CHAR sprites use,
+  // but the reserved index is the same).
+  const pearl = decodeIfPresent(archive, 'PERLA.PCX', 0);
   if (pearl) assets.pearl = pearl;
   const arch = decodeIfPresent(archive, 'IOBLOUK.PCX');
   if (arch) assets.arch = arch;
