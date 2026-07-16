@@ -59,10 +59,16 @@ export interface ViewCell {
 // VIEW3D_Z in engine1.h — current cell plus 4 ahead.
 export const MAX_VIEW_DEPTH = 5;
 
+// draw_basic_sector: the texture actually shown is `q->prim + (q->prim_anim
+// >> 4)`, not prim alone — the upper nibble of prim_anim is an animation
+// frame offset (verified: LESPRED.MAP sector 18's west side has prim=24
+// pointing at a 4-frame sequence, LES1A21A..LES1A24A.PCX at consecutive
+// indices, with primAnim's upper nibble selecting which frame is current).
 function visibleTexture(side: ReturnType<typeof sideAt>): number | null {
   if (!side) return null;
   if ((side.flags & SD_PRIM_VIS) === 0) return null;
-  return side.prim !== 0 ? side.prim : null;
+  if (side.prim === 0) return null;
+  return side.prim + (side.primAnim >> 4);
 }
 
 // Mirrors builder.c's per-cell wall pick (draw_basic_sector) and the

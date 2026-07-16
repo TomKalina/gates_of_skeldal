@@ -34,6 +34,15 @@ export interface MapSide {
   prim: number;
   sec: number;
   flags: number;
+  // Upper nibble is an animation-frame offset added to prim/sec at render
+  // time (builder.c's draw_basic_sector: `q->prim + (q->prim_anim >> 4)`) —
+  // verified against real data: LESPRED.MAP sector 18's west side has
+  // prim=24 pointing at a 4-frame swinging-decoration sequence
+  // (LES1A21A..LES1A24A.PCX at consecutive indices) and primAnim=35
+  // (0x23, upper nibble 2), so the frame actually shown is prim+2, not
+  // prim itself.
+  primAnim: number;
+  secAnim: number;
 }
 
 export interface MapSector {
@@ -104,6 +113,8 @@ function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
       prim: bytes[o] ?? 0,
       sec: bytes[o + 1] ?? 0,
       flags: view.getUint32(o + 8, true),
+      primAnim: bytes[o + 12] ?? 0,
+      secAnim: bytes[o + 13] ?? 0,
     });
   }
   return sides;

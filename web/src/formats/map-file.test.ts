@@ -90,7 +90,7 @@ describe('parseMapFile', () => {
 
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
-    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, flags: 0 });
-    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS });
+    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, flags: 0, primAnim: 0, secAnim: 0 });
+    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 });
   });
 });

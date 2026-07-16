@@ -3,10 +3,10 @@ import { SD_PLAY_IMPS, SD_PRIM_VIS, type DungeonMap, type MapSide } from '../for
 import { behind, canStep, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
-  return { prim, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS };
+  return { prim, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 };
 }
 function open(): MapSide {
-  return { prim: 0, sec: 0, flags: 0 };
+  return { prim: 0, sec: 0, flags: 0, primAnim: 0, secAnim: 0 };
 }
 
 // A 2-sector corridor: sector 0 (start, facing East) is open east into
@@ -60,6 +60,17 @@ describe('computeViewCells', () => {
     expect(cells).toHaveLength(2);
     expect(cells[0]).toMatchObject({ depth: 0, sector: 0, frontWallTexture: null, leftWallTexture: 5, rightWallTexture: 6 });
     expect(cells[1]).toMatchObject({ depth: 1, sector: 1, frontWallTexture: 9, leftWallTexture: 8, rightWallTexture: 10 });
+  });
+
+  it('adds the primAnim upper-nibble animation-frame offset to the texture index', () => {
+    const map = buildTestMap();
+    // sector 0's east side is open in the base fixture; give it a visible,
+    // animated wall instead (prim=5, currently on frame 2 of its sequence).
+    const animated: MapSide = { prim: 5, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0 };
+    const animatedMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? animated : s)) };
+
+    const cells = computeViewCells(animatedMap, 0, 1);
+    expect(cells[0]?.frontWallTexture).toBe(5 + 2);
   });
 });
 
