@@ -115,6 +115,30 @@ function imageDataToCanvas(data: ImageData): HTMLCanvasElement {
   return canvas;
 }
 
+// The reference roster box shows a small bust/face crop, not the full-body
+// sprite — but no separate bust-portrait asset exists in the archive. The
+// face grid at the top of the select page is really just a fixed region of
+// the desk-panel background art (POSTAVY.PCX) at FACE_GRID's coordinates,
+// so the same pixels can be cropped out of assets.deskPanel and reused here.
+const faceCropCache = new Map<number, HTMLCanvasElement>();
+function faceThumbnail(assets: CharacterCreationAssets, portraitIndex: number): HTMLCanvasElement | undefined {
+  if (!assets.deskPanel) return undefined;
+  const cached = faceCropCache.get(portraitIndex);
+  if (cached) return cached;
+  const slot = PORTRAIT_DISPLAY_ORDER.indexOf(portraitIndex as (typeof PORTRAIT_DISPLAY_ORDER)[number]);
+  if (slot === -1) return undefined;
+  const localX = FACE_GRID.x - DESK.x + slot * FACE_GRID.step;
+  const localY = FACE_GRID.y - DESK.y;
+  const crop = document.createElement('canvas');
+  crop.width = FACE_GRID.hitWidth;
+  crop.height = FACE_GRID.height;
+  const c = crop.getContext('2d');
+  if (!c) return undefined;
+  c.drawImage(imageDataToCanvas(assets.deskPanel), localX, localY, FACE_GRID.hitWidth, FACE_GRID.height, 0, 0, FACE_GRID.hitWidth, FACE_GRID.height);
+  faceCropCache.set(portraitIndex, crop);
+  return crop;
+}
+
 // TS counterpart of chargen.c's enter_generator(): pick a portrait, drag the
 // "pearl" around the attribute wheel to pick a stat-range archetype, name the
 // character, allocate bonus points on a stat-review screen, and repeat until
@@ -472,9 +496,9 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     ctx.strokeStyle = '#555';
     ctx.strokeRect(boxX + 0.5, boxY + 0.5, ROSTER_BOX.width, ROSTER_PORTRAIT_HEIGHT);
 
-    const sprite = selectedPortrait !== null ? assets.bodySprites?.get(selectedPortrait) : undefined;
-    if (sprite) {
-      ctx.drawImage(imageDataToCanvas(sprite), boxX, boxY, ROSTER_BOX.width, ROSTER_PORTRAIT_HEIGHT);
+    const face = selectedPortrait !== null ? faceThumbnail(assets, selectedPortrait) : undefined;
+    if (face) {
+      ctx.drawImage(face, boxX, boxY, ROSTER_BOX.width, ROSTER_PORTRAIT_HEIGHT);
     } else {
       ctx.fillStyle = '#000';
       ctx.fillRect(boxX, boxY, ROSTER_BOX.width, ROSTER_PORTRAIT_HEIGHT);
