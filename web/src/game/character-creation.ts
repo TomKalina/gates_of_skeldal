@@ -105,7 +105,6 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
 
   const nameInput = document.createElement('input');
   nameInput.type = 'text';
-  nameInput.placeholder = 'Character name';
   nameInput.maxLength = 20;
   nameInput.style.position = 'absolute';
   nameInput.style.font = '11px monospace';
@@ -318,7 +317,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
       if (!member) return;
       ctx.fillStyle = '#8899aa';
       ctx.fillRect(x + 4, ROSTER_SLOT.y + 4, ROSTER_SLOT.width - 8, 10);
-      ctx.fillStyle = '#111';
+      ctx.fillStyle = '#ccc';
       ctx.font = '11px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';

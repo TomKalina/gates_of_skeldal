@@ -111,6 +111,13 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
 
 // TSECTOR.floor/ceil and TSTENA.prim are 1-based indices into the map's own
 // embedded filename list (realgame.c: prepare_graphics); 0 means "none".
+// Some slots in that list point at EMPTY.PCX — a 10x10 solid-white sentinel
+// image, not real art — meaning "this side has no texture" (e.g. a
+// decoration wall with nothing on its flank). It must be skipped here so
+// affected sides fall through to "no texture" rendering instead of a
+// stretched white rectangle.
+const EMPTY_TEXTURE_NAME = 'EMPTY.PCX';
+
 function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
@@ -118,6 +125,7 @@ function loadTextureSet(
 ): ReadonlyMap<number, ImageData> {
   const textures = new Map<number, ImageData>();
   names.forEach((name, i) => {
+    if (name.toUpperCase() === EMPTY_TEXTURE_NAME) return;
     const raw = archive.extract(name);
     if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw, transparentIndex !== undefined ? { transparentIndex } : {})));
   });

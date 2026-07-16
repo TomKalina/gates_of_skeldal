@@ -113,6 +113,28 @@ parity vs C build where applicable). Updated as issues close.
     dev-only Vite route pattern as the DDL now also serves an allowlisted set
     of map files (`vite.config.ts`'s `ALLOWED_DEV_MAPS`) — no production
     fallback yet, that's part of the real asset-intake screen (#2).
+  - **Real bug, fixed**: some slots in a map's main/left/right texture name
+    list point at `EMPTY.PCX` — a 10×10 solid-white sentinel image (verified
+    by decoding it directly: single color, `(255,255,255)`, no colorkey
+    pixels at all), meaning "no texture on this side", not real art. Loading
+    it like any other texture stretched a stark white rectangle across the
+    wall/side it was assigned to (visible turning to face sector 18's south
+    side in `LESPRED.MAP`). `loadTextureSet` in `main.ts` now skips any name
+    matching `EMPTY.PCX` (case-insensitively) so that slot resolves to "no
+    texture" and falls through to the plain fallback fill instead.
+  - Investigated the reference screenshot's floor-standing table (candle +
+    quill + scroll) at length: no `STUL`/`STOL`/`TABLE`-named asset exists
+    anywhere in `SKELDAL.DDL`'s 2482 files, and the one niche
+    (`A_MAPVYK`/`TVYKLENEK`) attached to the starting sector only holds a
+    single small scroll icon. The starting sector's own front wall (facing
+    the map's real `start_direction`) is a real, correctly-transparent
+    decorative texture (`LES1A23A.PCX`, a wall-mounted bracket with a
+    dangling candle-like ornament) sitting in the *same* main-texture slot
+    ordinary plain walls use — i.e. this is intentional set dressing baked
+    into the map, not a rendering bug — and a window + a bookshelf (matching
+    other elements from the reference screenshot) are both one sector away.
+    Whether the reference screenshot's exact table framing is a different
+    camera step or a different map entirely remains unresolved.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
