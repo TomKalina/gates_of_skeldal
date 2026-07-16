@@ -30,26 +30,51 @@ parity vs C build where applicable). Updated as issues close.
   the fallback file picker when #2/#8 land.
 - Character creation (`src/game/character-creation.ts`) merges chargen.c's two
   pages (portrait+wheel, then a full parchment character sheet) into one
-  screen, and simplifies several things deliberately:
+  screen. Rebuilt against 4 real reference screenshots of the original build
+  (measured pixel-by-pixel: Czech stat-range labels `SÍLA:`/`U.MAG:`/`POHYB:`/
+  `OBRAT:`, single dynamic roster box instead of a 6-slot grid, two-column
+  stat-review layout incl. `Ochrany:`/weapon-bonus list/`Jídlo`+`Voda` gauges,
+  button/wheel styling) — reference images kept locally under
+  `docs/reference/` (gitignored, never committed — copyrighted game art), so
+  future passes can re-measure without asking for screenshots again. Two
+  compositing bugs turned up along the way, not specific to chargen: `ctx.
+  putImageData()` overwrites pixels wholesale instead of alpha-compositing, so
+  drawing a colorkey-transparent sprite with it (the body sprite over the
+  arch, the wheel's pearl over the parchment) punched a solid block of
+  whatever's behind the *canvas element* through the transparent area instead
+  of revealing previously-drawn canvas content — fixed by drawing those via
+  `ctx.drawImage()` off a cached offscreen canvas instead. Worth checking any
+  future asset that combines colorkey transparency with layering over other
+  canvas content.
   - Uses a native `<input>` for the name field and `window.confirm` for the
     cancel prompt instead of the real GUI toolkit (#8/#9) and the exact
     `message()` dialog wording.
   - Button hit-testing is plain rects, not `CHARGENM.PCX`'s per-pixel mask —
     same placeholder pattern as the main menu.
-  - Shows only the stats chargen.c itself rolls (STR/MAG/SPD/DEX, derived
-    HP/mana/stamina, level, bonus points) — not the full `inv_display_vlastnosti()`
-    character sheet (weapon skills, elemental resistances, food/water gauges),
-    which depends on the equipment/inventory system (#14).
+  - Attack/defense/actions, resistances, weapon-bonuses, and the Jídlo/Voda
+    gauges show the fixed values `generuj_postavu` always sets for a fresh,
+    unequipped level-1 character — not fabricated, just not tracked as
+    per-character state since there's no equipment/game-clock system yet
+    (#13/#14); same for the `[400]` exp-to-next-level bracket next to `Zk.`
+    — no leveling table to compute it from yet.
+  - Roster box's portrait thumbnail reuses the full-body `CHARxx.PCX` sprite
+    squeezed into a small cell; the reference shows a proper face/bust crop
+    there instead, but no separate bust-portrait asset has turned up yet.
+  - Bottom panel is a flat fill — the reference renders it as a carved-stone
+    panel (chain/skull column, rope carving, its own frame around "Vše
+    znovu"); no asset hook exists for that art yet.
   - Party roster is append-only for now — no re-editing or deleting an
     already-added member (`view_another_click2`'s roster-slot editing and
     `gen_exit_editor`'s delete-mode aren't ported).
   - **Real discovery, worth keeping in mind for other sprite work**: chargen.c's
     `women[]`/`poradi[]` tables mean portrait-to-gender isn't a simple index
     threshold — portrait file 1 is female even though files 2-4 aren't (see
-    `PORTRAIT_DISPLAY_ORDER` in `party.ts`). Also, sprite PCX files (`CHARxx.PCX`)
-    use palette index 0 as a colorkey-transparent background (verified against
-    the real `CHAR00.PCX`: index 0 is pure blue `(0,0,255)` and ~61% of pixels)
-    — `decodePcx()` takes an opt-in `transparentIndex` option for this since
+    `PORTRAIT_DISPLAY_ORDER` in `party.ts`). Also, sprite PCX files (`CHARxx.PCX`,
+    `PERLA.PCX`) use palette index 0 as a colorkey-transparent background
+    (verified against the real `CHAR00.PCX`: index 0 is pure blue
+    `(0,0,255)` and ~61% of pixels; `PERLA.PCX`: index 0 is a pure red
+    `(166,0,0)` and ~29% of pixels — same reserved slot, different paint) —
+    `decodePcx()` takes an opt-in `transparentIndex` option for this since
     plain background art has no such convention.
 - First dungeon view (`src/formats/map-file.ts`, `src/game/dungeon.ts`,
   `src/game/dungeon-view.ts`): parses the real `.MAP` binary format (block
