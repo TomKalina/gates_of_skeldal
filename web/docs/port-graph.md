@@ -176,29 +176,36 @@ parity vs C build where applicable). Updated as issues close.
     side in `LESPRED.MAP`). `loadTextureSet` in `main.ts` now skips any name
     matching `EMPTY.PCX` (case-insensitively) so that slot resolves to "no
     texture" and falls through to the plain fallback fill instead.
-  - Investigated the reference screenshot's floor-standing table (candle +
-    quill + scroll) at length: no `STUL`/`STOL`/`TABLE`-named asset exists
-    anywhere in `SKELDAL.DDL`'s 2482 files, the one niche
-    (`A_MAPVYK`/`TVYKLENEK`) attached to the starting sector only holds a
-    single small scroll icon, and directly decoding/viewing every candidate
-    wall texture in the start sector's vicinity (`LES1W10A`, `LES1W11A`,
-    `LES1W05A.PCX`) shows plain wood paneling, no table motif painted into
-    any of them either. The 2D lateral-visibility fix above did resolve the
-    *room shape* — the reference's window-left/bookshelf-right composite
-    now renders correctly, since both are visible sideways through the
-    start sector's transparent south/north sides, not from walking further
-    into the map as first assumed — but the literal table object itself is
-    still unaccounted for. The starting sector's own front wall (facing the
-    map's real `start_direction`) is a real, correctly-transparent
-    decorative texture (`LES1A23A.PCX`, a wall-mounted bracket with a
-    dangling candle-like ornament) sitting in the *same* main-texture slot
-    ordinary plain walls use — i.e. this is intentional set dressing baked
-    into the map, not a rendering bug — but it doesn't match the reference's
-    front-center view at all (which shows plain wall, no red backing),
-    suggesting the reference's exact camera framing still isn't identical to
-    this port's start position/direction, or the table is a placed-item
-    system (`draw_placed_items_normal`/`draw_mob`) this port hasn't
-    implemented at all yet. Remains unresolved.
+  - **Resolved**: the reference screenshot's floor-standing table (candle +
+    quill/inkwell + scroll) turned out to be `LES1A23A.PCX` itself — the
+    same texture previously (and wrongly) described here as "a wall-mounted
+    bracket with a dangling candle-like ornament." Decoding it and flipping
+    it top-to-bottom shows an unmistakable, well-composed table exactly
+    matching the reference; what looked like "dangling ornaments below a
+    shelf" the right way up is the quill and candle sitting on the
+    tabletop, upside down. This asset (and its 3 animation siblings,
+    `LES1A21A/22A/24A.PCX`) is authored top-to-bottom flipped relative to
+    ordinary wall art — verified against the side's `oblouk` byte (TSTENA
+    offset 2, previously unparsed): its `SD_HAS_NICHE` bit (`0x10`,
+    `builder.c`'s `if (q->oblouk & 0x10) draw_vyklenek(...)`) is set on
+    exactly this side, and an ordinary window texture with no niche bit
+    renders right-side-up unflipped, so the flip is now applied whenever
+    that bit is set (`dungeon.ts`'s `ViewCell.frontWallFlipped`,
+    `dungeon-view.ts`'s `toDrawableFlipped`) rather than guessed from a
+    filename pattern. Verified against exactly one real example, so treat
+    as a strong hypothesis, not a fully proven general rule, if it doesn't
+    hold up against a second niche-bearing side elsewhere in the map.
+    Combined with the 2D lateral-visibility fix above (which surfaced the
+    window-left/bookshelf-right composite these render alongside), the
+    reference's whole room now matches closely. One residual mismatch: a
+    red background patch renders around/behind the table where the
+    reference shows plain wood — this port stretches the texture's full
+    500x320 canvas to fill the entire depth-cell rect the same way it does
+    for ordinary wall panels, but the real renderer (`show_cel2`'s `plac`,
+    driven by `oblouk`'s other 2-bit `SD_POSITION` field, `0x60` — 0 for
+    this side) likely scales niche props uniformly by depth and
+    floor-anchors them instead of stretching them to fill the whole wall
+    height; that native-scale-plus-anchor positioning isn't ported yet.
   - **Real dungeon UI chrome**, added against a reference screenshot showing
     the actual top/bottom bars: the top status bar is one real asset,
     `TOPBAR.PCX` (640x16 — button/icon x-boundaries measured directly off it

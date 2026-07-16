@@ -1,4 +1,4 @@
-import { SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
+import { SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -59,6 +59,18 @@ export interface ViewCell {
   rightWallTexture: number | null;
   floorTexture: number;
   ceilTexture: number;
+  // A side with a TVYKLENEK niche attached (oblouk & SD_HAS_NICHE) uses its
+  // "wall" texture slot for a floor-standing prop instead of a normal wall
+  // panel (verified: LESPRED.MAP's start sector west side, oblouk=0x10,
+  // prim texture LES1A23A.PCX — decoding and flipping it top-to-bottom
+  // turns an apparently ceiling-hung bracket into a correctly-oriented
+  // table with a quill/inkwell and candle on top, matching the reference
+  // screenshot). Real ordinary wall textures (oblouk's niche bit unset)
+  // don't need this — confirmed by a window texture rendering right-side-up
+  // (sill at the bottom) without any flip. Not yet verified against a
+  // second, independent niche-bearing side, so this is a one-example-backed
+  // hypothesis tied to real map data rather than a guessed filename rule.
+  frontWallFlipped: boolean;
 }
 
 // VIEW3D_Z/VIEW3D_X in engine1.h.
@@ -91,6 +103,10 @@ function visibleTexture(side: ReturnType<typeof sideAt>): number | null {
 // doors/windows/open walls — never got computed or drawn at all.
 function isTransparent(side: ReturnType<typeof sideAt>): boolean {
   return side !== undefined && (side.flags & SD_TRANSPARENT) !== 0;
+}
+
+function hasNiche(side: ReturnType<typeof sideAt>): boolean {
+  return side !== undefined && (side.oblouk & SD_HAS_NICHE) !== 0;
 }
 
 // Mirrors create_minimap/crt_minimap_itr: a depth-and-lateral grid of every
@@ -131,6 +147,7 @@ export function computeVisibleGrid(map: DungeonMap, startSector: number, facing:
       rightWallTexture: visibleTexture(rightSide),
       floorTexture: sectorData.floor,
       ceilTexture: sectorData.ceil,
+      frontWallFlipped: hasNiche(frontSide),
     });
 
     if (isTransparent(frontSide)) {

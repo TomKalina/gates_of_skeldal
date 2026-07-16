@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMapFile, sideAt, SD_PLAY_IMPS, SD_PRIM_VIS } from './map-file';
+import { parseMapFile, sideAt, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -41,10 +41,11 @@ function sectorPayload(floor: number, ceil: number, stepNext: [number, number, n
   return payload;
 }
 
-function sidePayload(prim: number, flags: number): Uint8Array {
+function sidePayload(prim: number, flags: number, oblouk = 0): Uint8Array {
   const payload = new Uint8Array(16);
   const view = new DataView(payload.buffer);
   payload[0] = prim;
+  payload[2] = oblouk;
   view.setUint32(8, flags, true);
   return payload;
 }
@@ -58,7 +59,7 @@ function buildMapBuffer(): ArrayBuffer {
       new Uint8Array([
         ...sidePayload(1, 0),
         ...sidePayload(2, SD_PLAY_IMPS | SD_PRIM_VIS),
-        ...sidePayload(3, 0),
+        ...sidePayload(3, 0, SD_HAS_NICHE),
         ...sidePayload(4, 0),
       ]),
     ),
@@ -90,7 +91,12 @@ describe('parseMapFile', () => {
 
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
-    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, flags: 0, primAnim: 0, secAnim: 0 });
-    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 });
+    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0 });
+    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 });
+  });
+
+  it('parses oblouk, whose SD_HAS_NICHE bit flags a side with a TVYKLENEK niche attached', () => {
+    const map = parseMapFile(buildMapBuffer());
+    expect(sideAt(map, 0, 2)?.oblouk).toBe(SD_HAS_NICHE);
   });
 });

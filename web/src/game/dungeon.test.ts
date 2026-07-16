@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
+import { SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
 import { behind, canStep, computeVisibleGrid, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
-  return { prim, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 };
+  return { prim, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 };
 }
 // A real open passage is also SD_TRANSPARENT — verified against LESPRED.MAP,
 // where every side with no wall image (SD_PRIM_VIS unset) also has this bit
 // set, since visibility past an open side is gated by SD_TRANSPARENT, not
 // SD_PRIM_VIS (see dungeon.ts's computeVisibleGrid).
 function open(): MapSide {
-  return { prim: 0, sec: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0 };
+  return { prim: 0, sec: 0, oblouk: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0 };
 }
 
 // A 2-sector corridor: sector 0 (start, facing East) is open east into
@@ -70,11 +70,25 @@ describe('computeViewCells', () => {
     const map = buildTestMap();
     // sector 0's east side is open in the base fixture; give it a visible,
     // animated wall instead (prim=5, currently on frame 2 of its sequence).
-    const animated: MapSide = { prim: 5, sec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0 };
+    const animated: MapSide = { prim: 5, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0 };
     const animatedMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? animated : s)) };
 
     const cells = computeViewCells(animatedMap, 0, 1);
     expect(cells[0]?.frontWallTexture).toBe(5 + 2);
+  });
+
+  it('flags a niche-bearing front wall for a vertical flip', () => {
+    // A side with oblouk's SD_HAS_NICHE bit set uses its "wall" texture slot
+    // for a floor-standing prop (verified against LESPRED.MAP's start
+    // sector: oblouk=0x10, prim texture LES1A23A.PCX — a table, stored
+    // flipped top-to-bottom relative to ordinary wall art).
+    const map = buildTestMap();
+    const nicheWall: MapSide = { prim: 5, sec: 0, oblouk: SD_HAS_NICHE, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_TRANSPARENT, primAnim: 0, secAnim: 0 };
+    const nicheMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? nicheWall : s)) };
+
+    const cells = computeViewCells(nicheMap, 0, 1);
+    expect(cells[0]?.frontWallFlipped).toBe(true);
+    expect(cells[1]?.frontWallFlipped).toBe(false);
   });
 });
 

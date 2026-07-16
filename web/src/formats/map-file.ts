@@ -30,6 +30,15 @@ export const SD_TRANSPARENT = 0x80;
 export const SD_PRIM_VIS = 0x200;
 export const SD_SEC_VIS = 0x2000;
 
+// `oblouk` (TSTENA byte offset 2, game/globals.h's struct tstena) packs
+// several unrelated sub-fields into one byte; builder.c reads them as
+// `oblouk & 0xf` (an arch-texture index), `oblouk & 0x10` (has this side got
+// a TVYKLENEK niche attached — `if (q->oblouk & 0x10) draw_vyklenek(...)`),
+// and `oblouk & SD_POSITION` (0x60, a 2-bit vertical-anchor selector for
+// show_cel2's `plac`). The niche bit isn't a named constant in the source;
+// SD_HAS_NICHE here is this port's own name for it.
+export const SD_HAS_NICHE = 0x10;
+
 export interface MapSide {
   prim: number;
   sec: number;
@@ -43,6 +52,7 @@ export interface MapSide {
   // prim itself.
   primAnim: number;
   secAnim: number;
+  oblouk: number;
 }
 
 export interface MapSector {
@@ -112,6 +122,7 @@ function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
     sides.push({
       prim: bytes[o] ?? 0,
       sec: bytes[o + 1] ?? 0,
+      oblouk: bytes[o + 2] ?? 0,
       flags: view.getUint32(o + 8, true),
       primAnim: bytes[o + 12] ?? 0,
       secAnim: bytes[o + 13] ?? 0,
