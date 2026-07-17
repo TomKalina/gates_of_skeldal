@@ -549,11 +549,10 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     // actually being usable in this port's interaction model.)
     const canAccept = mode === 'select' ? selectedPortrait !== null && validateCharacterName(nameInput.value) : true;
     const canStart = mode === 'select' && isPartyReady(roster);
-    // The real trigger for Vymazat going gold couldn't be determined from
-    // the available screenshots (the only review-mode reference shows it
-    // plain/dark), so it's never highlighted rather than reusing the
-    // disproven mode === 'review' condition.
-    const canErase = false;
+    // Same affordance issue as Přijmout above: eraseCurrent() only ever
+    // does anything in review mode (discards the current roll, back to
+    // select), so it must read as clickable there too.
+    const canErase = mode === 'review';
     drawButton(BUTTONS.accept, canAccept);
     drawButton(BUTTONS.start, canStart);
     drawButton(BUTTONS.erase, canErase);
