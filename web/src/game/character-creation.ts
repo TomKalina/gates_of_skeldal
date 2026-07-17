@@ -539,10 +539,15 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
       ctx.fillText(statusText, ROSTER_BOX.x + ROSTER_BOX.width + 10, PANEL.y + PANEL.height - 14);
     }
 
-    // Přijmout only reads gold once the select-mode inputs it acts on are
-    // complete (name + portrait) — not simply while mode === 'review'
-    // (that mode is the one reference screenshot where it isn't gold).
-    const canAccept = mode === 'select' && selectedPortrait !== null && validateCharacterName(nameInput.value);
+    // In select mode, Přijmout only reads gold once its inputs are complete
+    // (name + portrait). In review mode it's always gold: clicking it there
+    // is the only way to commit the rolled character and continue to the
+    // next one, so it must never look disabled — a real user reported
+    // getting stuck here because the button read as inert right when they
+    // needed to click it. (One reference screenshot happens to show it gray
+    // in review mode, but that shouldn't take priority over the flow
+    // actually being usable in this port's interaction model.)
+    const canAccept = mode === 'select' ? selectedPortrait !== null && validateCharacterName(nameInput.value) : true;
     const canStart = mode === 'select' && isPartyReady(roster);
     // The real trigger for Vymazat going gold couldn't be determined from
     // the available screenshots (the only review-mode reference shows it
