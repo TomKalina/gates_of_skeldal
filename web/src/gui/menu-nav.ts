@@ -2,11 +2,18 @@ export const MENU_ITEMS = ['New Game', 'Load Game', 'Intro', 'Credits', 'Quit'] 
 
 export type MenuChoice = 0 | 1 | 2 | 3 | 4;
 
-// Screen-space rect of the button stack in the original 640x480 layout
-// (menu.c clk_main_menu: 220,300 .. 220+206,300+177). Sub-region hit-testing
-// there reads a per-pixel mask (MENUVOL5.PCX); until that asset pipeline
-// lands (#5/#8) we split the rect into 5 equal bands top-to-bottom.
-export const MENU_RECT = { x: 220, y: 300, width: 206, height: 177 } as const;
+// Screen-space rect of the button stack. Y/height corrected by measuring
+// MAINMENU.PCX directly (scanning for the button-label text color's row
+// density): the 5 items' text-row centers are evenly spaced ~30px apart
+// starting around y=317, not the originally-guessed y=300/height=177 —
+// the old rect's highlight box rendered visibly above and outside the
+// real "NOVÁ HRA" text. X/width unchanged (no clean evidence they're off;
+// a text-color scan in that row range picks up the title logo art above
+// the buttons too, so it isn't a reliable horizontal measurement here).
+// Sub-region hit-testing still reads a per-pixel mask (MENUVOL5.PCX) in
+// the original; until that asset pipeline lands (#5/#8) we split the rect
+// into 5 equal bands top-to-bottom.
+export const MENU_RECT = { x: 220, y: 317, width: 206, height: 151 } as const;
 
 export function clampMenuIndex(index: number): MenuChoice {
   if (index <= 0) return 0;
