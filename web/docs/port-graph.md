@@ -192,9 +192,15 @@ parity vs C build where applicable). Updated as issues close.
     renders right-side-up unflipped, so the flip is now applied whenever
     that bit is set (`dungeon.ts`'s `ViewCell.frontWallFlipped`,
     `dungeon-view.ts`'s `toDrawableFlipped`) rather than guessed from a
-    filename pattern. Verified against exactly one real example, so treat
-    as a strong hypothesis, not a fully proven general rule, if it doesn't
-    hold up against a second niche-bearing side elsewhere in the map.
+    filename pattern. Cross-checked against every `.MAP` file under
+    `data/maps/` (22 maps, ~1200 sides total): only 4 sides anywhere set
+    `SD_HAS_NICHE`, and only 2 of those have a real prim texture to flip.
+    The second one, `SKRETI.MAP` sector 200's `SKREW02A.PCX` (a cave scene
+    with cobwebs and a wood bridge/plank), is consistent with the same
+    flip — the plank only sits at floor level, as a walkway should, in the
+    flipped orientation — independently supporting the hypothesis on a
+    different map and a visually much less table-shaped texture. Still
+    only 2 real data points, so treat as strongly (not fully) confirmed.
     Combined with the 2D lateral-visibility fix above (which surfaced the
     window-left/bookshelf-right composite these render alongside), the
     reference's whole room now matches closely. One residual mismatch: a
