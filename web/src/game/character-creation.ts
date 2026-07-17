@@ -31,12 +31,11 @@ const PEARL_CENTER = { x: 455, y: 234 };
 const PANEL = { x: 0, y: 378, width: 640, height: 102 };
 // chargen.c's edit_name() calls add_task(16384, type_text_v2,
 // postavy[cur_edited].jmeno, 120, 2, 104, ...), but the black field actually
-// drawn in the topbar art measures larger than that hit-rect (measured via
-// corner-rivet landmarks in a reference screenshot — lower confidence than
-// the other fixes here since it's an indirect calibration, not a direct
-// source cross-check): flush with the top of the bar and a few px
-// wider/taller, roughly x:110, y:0, width:110, height:16.
-const NAME_INPUT_RECT = { x: 110, y: 0, width: 110, height: 16 };
+// drawn in the topbar art is a different rect — measured by decoding
+// TOPBAR_P.PCX directly and scanning for the black box's exact pixel
+// bounds (not estimated from a screenshot): x:[117,226] (width 110),
+// spanning the full 16px bar height.
+const NAME_INPUT_RECT = { x: 117, y: 0, width: 110, height: 16 };
 
 const BUTTON_HEIGHT = 18;
 const BUTTONS_X = 520;
