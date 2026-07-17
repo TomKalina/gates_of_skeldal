@@ -45,7 +45,14 @@ export interface DecodePcxOptions {
   // textures in between. So it's safe to always pass the asset type's
   // known index; when a given image doesn't use it, nothing gets punched
   // out, since no pixel matches.
-  transparentIndex?: number;
+  //
+  // A niche-flagged wall side's prop texture (see dungeon.ts's
+  // frontWallFlipped) reserves *two* indices for background — verified
+  // against LES1A23A.PCX (a table): index 1 is the usual wall/decoration
+  // colorkey (61% of pixels), but index 0 is a second, separately-painted
+  // "background" color (here, opaque red, 27% of pixels) that isn't real
+  // content either. Passing an array punches out all of them.
+  transparentIndex?: number | number[];
 }
 
 export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): PcxImage {
@@ -64,6 +71,14 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
   const paletteOffset = data.length - PALETTE_SIZE;
   const palette = data.subarray(paletteOffset, paletteOffset + PALETTE_SIZE);
 
+  const transparentIndices = new Set(
+    options.transparentIndex === undefined
+      ? []
+      : Array.isArray(options.transparentIndex)
+        ? options.transparentIndex
+        : [options.transparentIndex],
+  );
+
   const rgba = new Uint8ClampedArray(new ArrayBuffer(width * height * 4));
   let srcPos = HEADER_SIZE;
   for (let y = 0; y < height; y++) {
@@ -72,7 +87,7 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
     for (let x = 0; x < width; x++) {
       const paletteIndex = row[x] ?? 0;
       const out = (y * width + x) * 4;
-      if (paletteIndex === options.transparentIndex) {
+      if (transparentIndices.has(paletteIndex)) {
         rgba[out + 3] = 0;
         continue;
       }

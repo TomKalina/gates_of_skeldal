@@ -7,7 +7,7 @@ import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
-import { parseMapFile, type DungeonMap } from './formats/map-file';
+import { parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { decodePcx, pcxToImageData } from './codecs/pcx';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
@@ -127,12 +127,17 @@ function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
   transparentIndex?: number,
+  doubleKeyIndices?: ReadonlySet<number>,
 ): ReadonlyMap<number, ImageData> {
   const textures = new Map<number, ImageData>();
   names.forEach((name, i) => {
     if (name.toUpperCase() === EMPTY_TEXTURE_NAME) return;
     const raw = archive.extract(name);
-    if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw, transparentIndex !== undefined ? { transparentIndex } : {})));
+    if (!raw) return;
+    const key = i + 1;
+    const useDoubleKey = transparentIndex !== undefined && doubleKeyIndices?.has(key);
+    const options = useDoubleKey ? { transparentIndex: [0, transparentIndex] } : transparentIndex !== undefined ? { transparentIndex } : {};
+    textures.set(key, pcxToImageData(decodePcx(raw, options)));
   });
   return textures;
 }
@@ -144,9 +149,27 @@ function loadTextureSet(
 // don't use this convention (confirmed full-bleed).
 const WALL_TRANSPARENT_INDEX = 1;
 
+// A niche-flagged side's own front-wall texture (see dungeon.ts's
+// frontWallFlipped) reserves a *second* colorkey index (0) on top of the
+// usual wall/decoration one (1) — verified against LES1A23A.PCX, where
+// index 0 is a separately-painted red "background" covering 27% of the
+// image, distinct from index 1's colorkey. Only the main-texture set needs
+// this: a niche only ever renders through draw_basic_sector's front-facing
+// branch (dirs[1]), never as a left/right side wall.
+function nicheMainTextureIndices(map: DungeonMap): ReadonlySet<number> {
+  const indices = new Set<number>();
+  for (const side of map.sides) {
+    if ((side.oblouk & SD_HAS_NICHE) !== 0 && side.prim !== 0) {
+      indices.add(side.prim + (side.primAnim >> 4));
+    }
+  }
+  return indices;
+}
+
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
+  const niche = nicheMainTextureIndices(map);
   return {
-    main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX),
+    main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, niche),
     left: loadTextureSet(archive, map.leftTextures, WALL_TRANSPARENT_INDEX),
     right: loadTextureSet(archive, map.rightTextures, WALL_TRANSPARENT_INDEX),
     floor: loadTextureSet(archive, map.floorTextures),

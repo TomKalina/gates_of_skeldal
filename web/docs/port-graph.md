@@ -203,15 +203,25 @@ parity vs C build where applicable). Updated as issues close.
     only 2 real data points, so treat as strongly (not fully) confirmed.
     Combined with the 2D lateral-visibility fix above (which surfaced the
     window-left/bookshelf-right composite these render alongside), the
-    reference's whole room now matches closely. One residual mismatch: a
-    red background patch renders around/behind the table where the
-    reference shows plain wood — this port stretches the texture's full
-    500x320 canvas to fill the entire depth-cell rect the same way it does
-    for ordinary wall panels, but the real renderer (`show_cel2`'s `plac`,
-    driven by `oblouk`'s other 2-bit `SD_POSITION` field, `0x60` — 0 for
-    this side) likely scales niche props uniformly by depth and
-    floor-anchors them instead of stretching them to fill the whole wall
-    height; that native-scale-plus-anchor positioning isn't ported yet.
+    reference's whole room now matches closely, including the red
+    background patch that used to render around/behind the table:
+    `LES1A23A.PCX` turned out to reserve *two* separate colorkey indices,
+    not one — index 1 is the usual wall/decoration colorkey (61% of
+    pixels), but index 0 is a second, distinctly-painted "background" red
+    (27% of pixels) that isn't real content either. `decodePcx()`'s
+    `transparentIndex` option now accepts an array; `main.ts` scans the map
+    for niche-flagged sides (`nicheMainTextureIndices`) and decodes just
+    their main-texture entries with both indices punched, leaving ordinary
+    wall textures on the single-index convention. This is currently
+    hardcoded to index 0 specifically (verified only against
+    `LES1A23A.PCX`) — checked `SKREW02A.PCX` (the other real
+    niche-with-a-texture example, `SKRETI.MAP`) for the same pattern and it
+    does *not* hold: its dominant background index is 175, not 0, so this
+    fix would not correctly punch out its background if that map were ever
+    loaded (`SKRETI.MAP` isn't currently reachable in this port — only
+    `LESPRED.MAP` is). A real per-texture "second background index" solution
+    (rather than a hardcoded 0) is future work if/when another map is
+    wired up.
   - **Real dungeon UI chrome**, added against a reference screenshot showing
     the actual top/bottom bars: the top status bar is one real asset,
     `TOPBAR.PCX` (640x16 — button/icon x-boundaries measured directly off it

@@ -52,6 +52,19 @@ describe('decodePcx', () => {
     expect(alpha(1, 1)).toBe(255);
   });
 
+  it('zeroes alpha for every index in an array of transparentIndex values', () => {
+    // Niche prop textures (e.g. LES1A23A.PCX, a table) reserve two separate
+    // colorkey indices at once — one is the usual wall/decoration colorkey,
+    // the other is a distinct, separately-painted background color.
+    const image = decodePcx(buildPcx(), { transparentIndex: [1, 2] });
+    const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
+
+    expect(alpha(0, 0)).toBe(0); // index 1
+    expect(alpha(1, 0)).toBe(0); // index 1
+    expect(alpha(0, 1)).toBe(0); // index 2
+    expect(alpha(1, 1)).toBe(255); // index 3, untouched
+  });
+
   it('leaves every pixel opaque when transparentIndex is not present in the image', () => {
     // The whole point of always passing a fixed transparentIndex for a known
     // asset category: if this particular image doesn't use that index, no
