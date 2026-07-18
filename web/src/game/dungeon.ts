@@ -1,4 +1,4 @@
-import { SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
+import { A_OPEN_CLOSE, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -71,6 +71,15 @@ export interface ViewCell {
   // second, independent niche-bearing side, so this is a one-example-backed
   // hypothesis tied to real map data rather than a guessed filename rule.
   frontWallFlipped: boolean;
+  // A side's SECONDARY texture (sec/secAnim, gated by SD_SEC_VIS) is a
+  // completely separate slot from prim — verified against LESPRED.MAP's
+  // sector 14/15 door: prim=0 (nothing in the primary slot) but
+  // sec=15 (LES1A11A.PCX, a closed wooden door). Previously unrendered
+  // entirely, since this MVP only ever read prim/primAnim.
+  frontSecTexture: number | null;
+  // True when this front side's action is A_OPEN_CLOSE (a real, clickable
+  // door in the source data) — see toggleDoor().
+  frontIsDoor: boolean;
 }
 
 // VIEW3D_Z/VIEW3D_X in engine1.h.
@@ -107,6 +116,15 @@ function isTransparent(side: ReturnType<typeof sideAt>): boolean {
 
 function hasNiche(side: ReturnType<typeof sideAt>): boolean {
   return side !== undefined && (side.oblouk & SD_HAS_NICHE) !== 0;
+}
+
+// Same idea as visibleTexture(), for the independent secondary slot
+// (sec/secAnim, gated by SD_SEC_VIS rather than SD_PRIM_VIS).
+function visibleSecTexture(side: ReturnType<typeof sideAt>): number | null {
+  if (!side) return null;
+  if ((side.flags & SD_SEC_VIS) === 0) return null;
+  if (side.sec === 0) return null;
+  return side.sec + (side.secAnim >> 4);
 }
 
 // Mirrors create_minimap/crt_minimap_itr: a depth-and-lateral grid of every
@@ -148,6 +166,8 @@ export function computeVisibleGrid(map: DungeonMap, startSector: number, facing:
       floorTexture: sectorData.floor,
       ceilTexture: sectorData.ceil,
       frontWallFlipped: hasNiche(frontSide),
+      frontSecTexture: visibleSecTexture(frontSide),
+      frontIsDoor: frontSide !== undefined && frontSide.action === A_OPEN_CLOSE,
     });
 
     if (isTransparent(frontSide)) {

@@ -256,6 +256,38 @@ parity vs C build where applicable). Updated as issues close.
     position. Loading from the main menu isn't wired up (`Obnova pozice` on
     the main menu still says "not implemented yet") — quick-save/quick-load
     only works from inside an active dungeon session for now.
+  - **Real, clickable doors**, added after a user report that there was no
+    way to walk outside from the starting building. `TSTENA`'s `action`
+    byte (offset 15, previously unparsed) drives `do_action()`'s action
+    codes in `realgame.c`; `A_OPEN_CLOSE` (3) is a toggle door. Scanning the
+    whole map for non-zero `action` bytes found exactly 3 sides across 301
+    sectors — a mirrored pair at sector 14 (east)/15 (west), 2 hops from the
+    start, plus one unreachable elsewhere. Sector 15 has `ceil=0` (no
+    ceiling — genuinely outdoors) vs. sector 14's `ceil=1`, and its own wall
+    textures (`LES1W01A/02A.PCX`, unusually tall at 500x750) are a real
+    forest scene — confirming this is exactly the "door to outside" gap.
+    This door renders entirely through the *secondary* texture slot
+    (`sec`/`secAnim`, gated by `SD_SEC_VIS`) — prim is 0 — which this port
+    had never read at all before (`dungeon.ts`'s `visibleSecTexture`,
+    `ViewCell.frontSecTexture`). The closed frame is `LES1A11A.PCX`; the
+    real engine steps through a full 7-frame swing animation
+    (`LES1A11A`..`17A.PCX`) per-tick via `SD_PRIM_FORV`/`SD_SEC_FORV`, which
+    this port simplifies to an instant toggle between the closed (offset 0)
+    and fully-open (offset 6) ends (`toggleDoor()` in `map-file.ts`),
+    matching the existing "no smooth step/turn animation" precedent —
+    flipping `SD_PLAY_IMPS` together with the frame so the doorway becomes
+    walkable exactly when it looks open. The open frame's doorway opening
+    is index-0 colorkey, same double-colorkey pattern as the niche table
+    (`main.ts`'s `doubleColorkeyMainTextureIndices`, extended to cover both).
+    Clicking is a plain front-wall-rect hit-test against whichever cells in
+    the current visible grid have `frontIsDoor` set — not the real per-pixel
+    mask. Verified live: walking to the door, clicking it open, and walking
+    through into the forest all work with zero console errors. One
+    unrelated cosmetic artifact spotted during this same verification: small
+    red slivers at the top corners of the forest side-wall textures once
+    outside — `LES1W01A/02A.PCX` don't use index 0 or 1 as a colorkey at
+    all (checked directly), so this isn't the same bug; source not yet
+    investigated.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 

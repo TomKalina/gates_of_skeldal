@@ -1,4 +1,5 @@
 import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type ViewCell } from './dungeon';
+import { sideAt, toggleDoor } from '../formats/map-file';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
 
@@ -192,6 +193,11 @@ export function runDungeonView(
   let state = initial;
   let hoverDpad: DpadDirection | null = null;
   let statusText = '';
+  // Cached from the last draw() for click hit-testing — doors are the only
+  // clickable thing in the 3D viewport, and their screen rects depend on
+  // the current view (depth/lateral), so a fresh grid computed on every
+  // draw is the only source of truth for "what's at this pixel".
+  let lastDoorCells: ViewCell[] = [];
 
   let resolveResult!: () => void;
   const result = new Promise<void>((resolve) => {
@@ -270,15 +276,25 @@ export function runDungeonView(
   // colorkey-punched), in which case farther geometry was already painted
   // behind it by the time this runs and shows through the gaps.
   function drawFrontWall(cell: ViewCell): void {
-    if (cell.frontWallTexture === null) return;
     const rect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
-    const image = textures.main.get(cell.frontWallTexture);
-    if (image) {
-      const drawable = cell.frontWallFlipped ? toDrawableFlipped(image) : toDrawable(image);
-      ctx.drawImage(drawable, rect.x, rect.y, rect.width, rect.height);
-    } else {
-      ctx.fillStyle = '#553';
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    if (cell.frontWallTexture !== null) {
+      const image = textures.main.get(cell.frontWallTexture);
+      if (image) {
+        const drawable = cell.frontWallFlipped ? toDrawableFlipped(image) : toDrawable(image);
+        ctx.drawImage(drawable, rect.x, rect.y, rect.width, rect.height);
+      } else {
+        ctx.fillStyle = '#553';
+        ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      }
+    }
+    // Secondary slot (sec/secAnim) is a fully independent texture from prim
+    // — verified against this map's sector 14/15 door, which has no prim
+    // texture at all (prim=0) and shows entirely through sec. Doesn't need
+    // frontWallFlipped's vertical flip: the door art (LES1A11A..17A.PCX)
+    // already renders right-side-up as decoded.
+    if (cell.frontSecTexture !== null) {
+      const image = textures.main.get(cell.frontSecTexture);
+      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
     }
   }
 
@@ -383,6 +399,7 @@ export function runDungeonView(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const grid = computeVisibleGrid(state.map, state.sector, state.direction);
+    lastDoorCells = grid.filter((cell) => cell.frontIsDoor);
 
     const centerColumn = grid.filter((cell) => cell.lateral === 0).sort((a, b) => a.depth - b.depth);
     const nearestCell = centerColumn[0];
@@ -442,6 +459,20 @@ export function runDungeonView(
       return;
     }
     // Nastavení and the icon cells have no system to open yet.
+
+    // Nearest door first, in case rects ever overlap.
+    const clickedDoor = [...lastDoorCells].sort((a, b) => a.depth - b.depth).find((cell) => {
+      const doorRect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
+      return rectContains(doorRect, x, y);
+    });
+    if (clickedDoor) {
+      const side = sideAt(state.map, clickedDoor.sector, state.direction);
+      if (side) {
+        toggleDoor(side);
+        draw();
+      }
+      return;
+    }
 
     const dpadOrig = dpadOrigin();
     const localX = x - dpadOrig.x;

@@ -7,7 +7,7 @@ import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
-import { parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
+import { A_OPEN_CLOSE, DOOR_CLOSED_FRAME_OFFSET, DOOR_OPEN_FRAME_OFFSET, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { decodePcx, pcxToImageData } from './codecs/pcx';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
@@ -153,23 +153,32 @@ const WALL_TRANSPARENT_INDEX = 1;
 // frontWallFlipped) reserves a *second* colorkey index (0) on top of the
 // usual wall/decoration one (1) — verified against LES1A23A.PCX, where
 // index 0 is a separately-painted red "background" covering 27% of the
-// image, distinct from index 1's colorkey. Only the main-texture set needs
-// this: a niche only ever renders through draw_basic_sector's front-facing
-// branch (dirs[1]), never as a left/right side wall.
-function nicheMainTextureIndices(map: DungeonMap): ReadonlySet<number> {
+// image, distinct from index 1's colorkey. A door's open-frame texture
+// needs the same treatment — verified against LES1A17A.PCX (the sector
+// 14/15 door's fully-open frame): its doorway opening is index 0 too, 20%
+// of the image, alongside the usual index-1 colorkey around the frame
+// (LES1A11A.PCX, the closed frame, only uses index 1 — there's no opening
+// to punch out yet). Only the main-texture set needs this: both niches and
+// doors only ever render through draw_basic_sector's front-facing branch
+// (dirs[1]), never as a left/right side wall.
+function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> {
   const indices = new Set<number>();
   for (const side of map.sides) {
     if ((side.oblouk & SD_HAS_NICHE) !== 0 && side.prim !== 0) {
       indices.add(side.prim + (side.primAnim >> 4));
+    }
+    if (side.action === A_OPEN_CLOSE && side.sec !== 0) {
+      indices.add(side.sec + DOOR_CLOSED_FRAME_OFFSET);
+      indices.add(side.sec + DOOR_OPEN_FRAME_OFFSET);
     }
   }
   return indices;
 }
 
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
-  const niche = nicheMainTextureIndices(map);
+  const doubleKey = doubleColorkeyMainTextureIndices(map);
   return {
-    main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, niche),
+    main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, doubleKey),
     left: loadTextureSet(archive, map.leftTextures, WALL_TRANSPARENT_INDEX),
     right: loadTextureSet(archive, map.rightTextures, WALL_TRANSPARENT_INDEX),
     floor: loadTextureSet(archive, map.floorTextures),

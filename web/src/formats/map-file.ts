@@ -39,6 +39,20 @@ export const SD_SEC_VIS = 0x2000;
 // SD_HAS_NICHE here is this port's own name for it.
 export const SD_HAS_NICHE = 0x10;
 
+// realgame.c's do_action() action codes (TSTENA byte offset 15, `action`).
+// A_OPEN_CLOSE toggles a door: verified against LESPRED.MAP sector 14's
+// east side (mirrored with sector 15's west side) — prim=0, sec=15
+// (LES1A11A.PCX, a closed wooden door) with SD_PLAY_IMPS set; sec+6
+// (LES1A17A.PCX) is the same frame sequence's fully-open doorway (a clean
+// see-through opening once its colorkey is punched). The real engine steps
+// through all 7 frames (11A..17A) via a per-tick animation driven by
+// SD_PRIM_FORV/SD_SEC_FORV; this port simplifies to an instant toggle
+// between the closed (offset 0) and open (offset 6) ends, matching the
+// project's existing "no smooth step/turn animation" precedent.
+export const A_OPEN_CLOSE = 3;
+export const DOOR_CLOSED_FRAME_OFFSET = 0;
+export const DOOR_OPEN_FRAME_OFFSET = 6;
+
 export interface MapSide {
   prim: number;
   sec: number;
@@ -53,6 +67,21 @@ export interface MapSide {
   primAnim: number;
   secAnim: number;
   oblouk: number;
+  action: number;
+}
+
+// A_OPEN_CLOSE toggle: swap the door's animation frame between closed and
+// open, and its passability to match. Mutates the side in place — this
+// port treats a parsed DungeonMap as live session state, not immutable
+// data, the same way character stats mutate in place during chargen.
+export function toggleDoor(side: MapSide): void {
+  if (side.action !== A_OPEN_CLOSE) return;
+  const lowNibble = side.secAnim & 0xf;
+  const currentOffset = side.secAnim >> 4;
+  const opening = currentOffset !== DOOR_OPEN_FRAME_OFFSET;
+  side.secAnim = ((opening ? DOOR_OPEN_FRAME_OFFSET : DOOR_CLOSED_FRAME_OFFSET) << 4) | lowNibble;
+  if (opening) side.flags &= ~SD_PLAY_IMPS;
+  else side.flags |= SD_PLAY_IMPS;
 }
 
 export interface MapSector {
@@ -126,6 +155,7 @@ function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
       flags: view.getUint32(o + 8, true),
       primAnim: bytes[o + 12] ?? 0,
       secAnim: bytes[o + 13] ?? 0,
+      action: bytes[o + 15] ?? 0,
     });
   }
   return sides;

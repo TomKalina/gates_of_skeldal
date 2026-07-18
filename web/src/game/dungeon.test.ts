@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
+import { A_OPEN_CLOSE, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
 import { behind, canStep, computeVisibleGrid, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
-  return { prim, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0 };
+  return { prim, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
 }
 // A real open passage is also SD_TRANSPARENT — verified against LESPRED.MAP,
 // where every side with no wall image (SD_PRIM_VIS unset) also has this bit
 // set, since visibility past an open side is gated by SD_TRANSPARENT, not
 // SD_PRIM_VIS (see dungeon.ts's computeVisibleGrid).
 function open(): MapSide {
-  return { prim: 0, sec: 0, oblouk: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0 };
+  return { prim: 0, sec: 0, oblouk: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0, action: 0 };
 }
 
 // A 2-sector corridor: sector 0 (start, facing East) is open east into
@@ -70,7 +70,7 @@ describe('computeViewCells', () => {
     const map = buildTestMap();
     // sector 0's east side is open in the base fixture; give it a visible,
     // animated wall instead (prim=5, currently on frame 2 of its sequence).
-    const animated: MapSide = { prim: 5, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0 };
+    const animated: MapSide = { prim: 5, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0, action: 0 };
     const animatedMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? animated : s)) };
 
     const cells = computeViewCells(animatedMap, 0, 1);
@@ -83,12 +83,25 @@ describe('computeViewCells', () => {
     // sector: oblouk=0x10, prim texture LES1A23A.PCX — a table, stored
     // flipped top-to-bottom relative to ordinary wall art).
     const map = buildTestMap();
-    const nicheWall: MapSide = { prim: 5, sec: 0, oblouk: SD_HAS_NICHE, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_TRANSPARENT, primAnim: 0, secAnim: 0 };
+    const nicheWall: MapSide = { prim: 5, sec: 0, oblouk: SD_HAS_NICHE, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_TRANSPARENT, primAnim: 0, secAnim: 0, action: 0 };
     const nicheMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? nicheWall : s)) };
 
     const cells = computeViewCells(nicheMap, 0, 1);
     expect(cells[0]?.frontWallFlipped).toBe(true);
     expect(cells[1]?.frontWallFlipped).toBe(false);
+  });
+
+  it('reports a door front side via its independent secondary texture slot', () => {
+    // Verified against LESPRED.MAP's sector 14/15 door: prim=0 (nothing in
+    // the primary slot) but sec=15 (a closed wooden door), SD_SEC_VIS set,
+    // action=A_OPEN_CLOSE. The primary and secondary texture questions are
+    // fully independent (see visibleSecTexture in dungeon.ts).
+    const map = buildTestMap();
+    const door: MapSide = { prim: 0, sec: 9, oblouk: 0, flags: SD_PLAY_IMPS | SD_SEC_VIS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const doorMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? door : s)) };
+
+    const cells = computeViewCells(doorMap, 0, 1);
+    expect(cells[0]).toMatchObject({ frontWallTexture: null, frontSecTexture: 9, frontIsDoor: true });
   });
 });
 
