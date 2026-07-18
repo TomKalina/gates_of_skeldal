@@ -49,33 +49,43 @@ feature more expensive than it should be:
 
 ## Phase A — Foundations (issues #7, #13)
 
-### A1. Event/task kernel → `src/platform/events.ts`
-Port the semantics of `libs/event.c` (+ `platform/legacy_coroutines.cpp`
-scheduling): task list, `add_task`/`term_task`, message passing
-(`send_message`, event codes `E_*` in `game/globals.h`), timers
-(`teventtimer`), per-tick pump. Drive the pump from
-`requestAnimationFrame` with the original's tick granularity.
-**Done when**: unit tests cover task add/kill/message/timer semantics;
-the dungeon view redraw + door animation (A3) run on the kernel instead of
-ad-hoc callbacks.
+### A1. Event/task kernel → `src/platform/events.ts` — **DONE** (2026-07-18)
+Ported `libs/event.c`'s semantics as async/await (JS has no fiber/stack-
+switch primitive; `add_task`/`task_wait_event` become `addTask`/
+`waitForEvent`, same suspend-and-resume-at-the-call-site shape verified
+against real call sites in `game/menu.c`/`game/chargen.c`). Also
+`sendMessage`, timers (`setTimer`/`waitTicks`/`pumpTick`). 12 unit tests.
+Not yet wired as the actual driver for anything else in the port — A3 is
+its first real consumer.
 
 ### A2. Macro interpreter + complete `do_action` → `src/game/actions.ts`, `src/game/macros.ts`
-- Parse the `A_MAPMACR` block (see `load_map` in `game/realgame.c` and
-  `TMULTI_ACTION` in `game/macros.c` / `globals.h`).
-- Implement `do_action()` fully (all `A_*` action codes in `realgame.c`
-  lines ~25–45 + the switch at `do_action`): open/close doors, show/hide
-  prim/sec, teleport open/close, `A_DISPLAY_TEXT` (needs level texts —
-  `.ENC` decode, see D4; stub with a TODO banner until then).
-- Implement `call_macro()` trigger dispatch (`MC_*` flags: `MC_STEPON`,
-  `MC_INCOMING`, `MC_SUCC_DONE`, `MC_ANIM`, `MC_OPENDOOR`, ...) and the
-  `SD_COPY_ACTION`/`SD_SEND_ACTION`/`SD_APPLY_2ND` forwarding at the end of
-  `do_action` (the existing door only toggles one side; the real mirrored
-  pair updates via `SD_APPLY_2ND`).
-- Route stepping-on-a-sector and clicking-a-wall through this system
-  (`realgame.c` lines ~530–560, `auto_action`).
-**Done when**: the sector 14/15 door works *through* the macro/action path
-(both mirrored sides update); synthetic-record unit tests for the parser
-and dispatch; walking all of LESPRED.MAP triggers no errors.
+**Scope correction (2026-07-18)**: `game/macros.c` turned out to be a
+~30-opcode bytecode VM for map scripting (`MA_FIREB`, `MA_LOADL`,
+`MA_CREAT`, `MA_IFJMP`, `MA_RANDJ`, `MA_GOMOB`, `MA_MONEY`, ... — item
+creation, monster spawns, conditional jumps, dialogue/book triggers, a
+`program_counter`-driven interpreter), not a small trigger dispatcher. Read
+`load_macros`/`read_macro_item` and the opcode list before estimating
+further — this is its own multi-session effort. Split accordingly:
+
+- **A2a. Complete `do_action` + action forwarding — DONE** (2026-07-18,
+  the `SD_APPLY_2ND` half; see commit "mirror door toggle to the opposite
+  side"). Remaining from this sub-scope: `A_RUN_PRIM`/`A_HIDE_PRIM`/
+  `A_SHOW_PRIM`/`A_SHOW_HIDE_PRIM` + the `SEC` equivalents, `A_CODELOCK_LOG*`,
+  `A_OPEN_TELEPORT`/`A_CLOSE_TELEPORT` (all read in `do_action`'s switch,
+  `game/realgame.c` — none ported yet except `A_OPEN_CLOSE`), plus
+  `SD_COPY_ACTION`/`SD_SEND_ACTION` forwarding (untested — no real map data
+  hits them yet, unlike `SD_APPLY_2ND` which had a live example).
+  `A_DISPLAY_TEXT` needs level-text decode (D4) first — stub with a
+  visible TODO marker until then, don't silently no-op.
+- **A2b. Macro VM interpreter** (separate, larger effort — do not start
+  before A2a, A3, and ideally B1/B2 land, since several opcodes touch
+  rendering/animation state those phases define): parse `A_MAPMACR`
+  (`load_macros`/`read_macro_item`), port the opcode switch, wire
+  `call_macro()`'s `MC_*` trigger dispatch (`MC_STEPON`, `MC_INCOMING`,
+  `MC_SUCC_DONE`, `MC_ANIM`, `MC_OPENDOOR`, ...) into stepping-on-a-sector
+  and clicking-a-wall (`realgame.c`'s `auto_action`). Consider porting
+  opcodes incrementally, one at a time, verified against a real map
+  reference that uses it, rather than all ~30 at once.
 
 ### A3. Per-tick side animation
 Port the prim/sec animation stepping (`realgame.c` ~740–790: `SD_PRIM_FORV`
