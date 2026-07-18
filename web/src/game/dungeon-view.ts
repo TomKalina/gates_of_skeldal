@@ -5,6 +5,7 @@ import type { Character } from './party';
 import { faceThumbnail } from './portraits';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
+import { calcPoints, floorCeilBand, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
@@ -200,7 +201,34 @@ export function runDungeonView(
     resolveResult = resolve;
   });
 
-  function drawFloorAndCeiling(nearestCell: ViewCell, centerColumnDepth: number): void {
+  // Phase B1: real per-cell floor/ceiling geometry (perspective.ts's
+  // calcPoints/floorCeilBand, ported from engine1.c's calc_points +
+  // create_tables) replacing the single stretched-image approximation.
+  // Floor/ceiling textures are pre-baked, screen-sized perspective art
+  // (640x199 floor, 640x93-ish ceiling — see perspective.ts's header) drawn
+  // at *native scale*, always anchored the same way (floor to the
+  // viewport's bottom edge, ceiling to its top) — what differs per visible
+  // cell is only the clip trapezoid, exactly mirroring how drawSideWall
+  // already clips wall textures. geometry is a pure constant (no map/state
+  // dependency), computed once and reused for every draw() call.
+  //
+  // Known gap: computeVisibleGrid only produces a cell where the traversal
+  // reaches it through a *transparent* side (dungeon.ts's isTransparent) —
+  // a solid wall simply stops the recursion, so no cell (and thus no
+  // floor/ceiling draw) exists beyond it. The real engine's minimap grid
+  // has no such gate: it always fills the full lateral extent bounded only
+  // by view geometry, using whatever sector occupies each slot, letting a
+  // nearer solid wall simply paint over the ceiling/floor behind it later.
+  // Rebuilding that (a wall-visibility-independent floor/ceiling traversal)
+  // is B2-adjacent scope, not attempted here. Instead this draws the old
+  // single-stretched-image approximation as a base layer first (using the
+  // nearest center-column cell's own texture, full viewport width — this
+  // is exactly what this function did before B1), then layers the new
+  // accurate per-cell trapezoids on top wherever a real cell exists — so a
+  // room wider than the transparent-reachable grid never regresses to a
+  // black gap, it just falls back to the old (still correct-looking,
+  // if less precise at sector boundaries) approximation at the fringes.
+  function drawFloorCeilBase(nearestCell: ViewCell, centerColumnDepth: number): void {
     const horizon = rectAtDepthLateral(centerColumnDepth, 0);
 
     const ceilImage = textures.ceil.get(nearestCell.ceilTexture);
@@ -221,6 +249,50 @@ export function runDungeonView(
       ctx.fillStyle = '#332';
       ctx.fillRect(VIEWPORT.x, floorY, VIEWPORT.width, floorHeight);
     }
+  }
+
+  const viewportGeometry = calcPoints();
+  const perspectiveScaleX = VIEWPORT.width / VIEW_SIZE_X;
+  const perspectiveScaleY = VIEWPORT.height / VIEW_SIZE_Y;
+
+  function drawFloorCeilCell(cell: ViewCell, edge: Edge): void {
+    // builder.c's draw_floor/draw_ceil macros only call draw_floor_ceil at
+    // all `if (s->floor)`/`if (s->ceil)` — texture id 0 means "genuinely no
+    // floor/ceiling here" (e.g. an outdoor sector seen through a window),
+    // not "texture failed to load", so it must draw nothing at all rather
+    // than a fallback fill (a flat-fill here would paint over the whole
+    // cell's trapezoid, including wherever a wall/window texture drawn
+    // afterward doesn't happen to cover).
+    const textureId = edge === 0 ? cell.floorTexture : cell.ceilTexture;
+    if (textureId === 0) return;
+    const image = (edge === 0 ? textures.floor : textures.ceil).get(textureId);
+    const band = floorCeilBand(viewportGeometry, cell.depth, cell.lateral, edge);
+    const rowNear = VIEWPORT.y + band.rowNear * perspectiveScaleY;
+    const rowFar = VIEWPORT.y + band.rowFar * perspectiveScaleY;
+    if (Math.abs(rowNear - rowFar) < 0.5) return;
+    const xlNear = VIEWPORT.x + band.xlNear * perspectiveScaleX;
+    const xrNear = VIEWPORT.x + band.xrNear * perspectiveScaleX;
+    const xlFar = VIEWPORT.x + band.xlFar * perspectiveScaleX;
+    const xrFar = VIEWPORT.x + band.xrFar * perspectiveScaleX;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(xlNear, rowNear);
+    ctx.lineTo(xrNear, rowNear);
+    ctx.lineTo(xrFar, rowFar);
+    ctx.lineTo(xlFar, rowFar);
+    ctx.closePath();
+    ctx.clip();
+
+    if (image) {
+      const height = image.height * perspectiveScaleY;
+      const y = edge === 0 ? VIEWPORT.y + VIEWPORT.height - height : VIEWPORT.y;
+      ctx.drawImage(toDrawable(image), VIEWPORT.x, y, VIEWPORT.width, height);
+    } else {
+      ctx.fillStyle = edge === 0 ? '#332' : '#223';
+      ctx.fillRect(VIEWPORT.x, VIEWPORT.y, VIEWPORT.width, VIEWPORT.height);
+    }
+    ctx.restore();
   }
 
   function drawSideWall(near: Rect, far: Rect, side: 'left' | 'right', image: ImageData | undefined): void {
@@ -399,11 +471,15 @@ export function runDungeonView(
 
     const centerColumn = grid.filter((cell) => cell.lateral === 0).sort((a, b) => a.depth - b.depth);
     const nearestCell = centerColumn[0];
-    if (nearestCell) drawFloorAndCeiling(nearestCell, centerColumn.length);
+    if (nearestCell) drawFloorCeilBase(nearestCell, centerColumn.length);
 
     // Farthest first, so a nearer transparent wall's colorkey-punched gaps
     // reveal whatever farther geometry was already painted behind it.
     const byDepthDescending = [...grid].sort((a, b) => b.depth - a.depth);
+    for (const cell of byDepthDescending) {
+      drawFloorCeilCell(cell, 0);
+      drawFloorCeilCell(cell, 1);
+    }
     for (const cell of byDepthDescending) {
       drawSideWalls(cell);
       drawFrontWall(cell);

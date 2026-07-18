@@ -131,13 +131,42 @@ sub-phase yet.
 
 ## Phase B — Renderer fidelity (issue #10 remainder)
 
-### B1. True floor/ceiling mapping
-Port `create_tables`' `f_table`/`c_table` + the floor/ceiling drawing
-(`fcdraw`, `draw_floor_ceil` in `engine1.c`) — per-scanline, per-cell
-source mapping with `check_autofade` edge fading. Replaces the single
-stretched image.
-**Done when**: side-by-side against a C-build screenshot, floors/ceilings
-match per-row (not just "look similar").
+### B1. True floor/ceiling mapping — **DONE** (2026-07-18)
+Ported the real geometry: `engine1.c`'s `calc_points()` (→
+`src/game/perspective.ts`'s `calcPoints`, an iterative integer-truncating
+decay `v -= v/FACTOR_3D`, *not* a closed-form `pow` — replicated exactly,
+`Math.trunc` matching C's `(int)` cast) and `create_tables()`'s floor/
+ceiling `xl`/`xr` reprojection (`floorCeilBand`). Confirmed via a deep
+source read (see port-graph.md) that `game/engine1.c`/`engine2.c` is the
+real, actively-built engine (`libs/engine1.c` and both `engine2.asm` files
+are dead legacy code, absent from every `CMakeLists.txt`), and that
+`fcdraw`'s scanline-table/memcpy mechanism is a DOS-era optimization for a
+*fixed-position, native-scale* blit — floor/ceiling textures are pre-baked
+640-wide perspective art (640x199 floor, 640x93-ish ceiling, verified
+against LESPRED.MAP's real PCX dimensions) always anchored to the same
+screen position; only the per-cell *clip region* varies. Ported the
+*visible result* (real per-cell trapezoid geometry + native-scale anchored
+texture) via Canvas2D clip+drawImage, not the scanline-table/memcpy
+technique itself, per this phase's own "simplify the technique, not the
+result" rule. Replaces the single stretched-nearest-cell-texture image
+with a per-visible-cell draw, so different sectors down a corridor now
+show their own distinct floor/ceiling texture instead of one bleeding
+across all of them (verified live: the forest floor's grass texture and
+the start room's dirt floor no longer share one wrong stretched image).
+**Known gap, not fixed here**: `computeVisibleGrid` only produces a cell
+where recursion reaches it through a transparent side; a solid wall stops
+it, so no floor/ceiling draws beyond it, unlike the real engine's
+wall-visibility-independent minimap grid. Worked around (not fixed) by
+layering the new accurate per-cell trapezoids on top of the old single-
+stretched-image approximation as a base fill, so a room wider than the
+transparent-reachable grid falls back to the old (still reasonable-
+looking) behavior at the fringes instead of a black gap. `check_autofade`
+(distance-fog fade baked into floor/ceiling textures on first use) is not
+ported — noted as a B3-adjacent follow-up, not attempted.
+Not done: bit-exact per-row match against a C-build screenshot (needs B0's
+golden-parity harness, which doesn't exist yet) — verified instead via
+Playwright screenshots against `docs/reference/*.png` by eye, consistent
+with every other visual verification this port has done so far.
 
 ### B2. Exact wall geometry
 Replace the closed-form `DEPTH_SCALE`/`rectAtDepthLateral` with the real
@@ -206,6 +235,18 @@ global deploy conventions.
 - Hardcoded second colorkey index 0 for niche/door/side-wall textures —
   works for LESPRED.MAP, known-wrong for SKRETI.MAP (index 175); revisit
   when D3 makes other maps reachable.
+- Wall geometry (`rectAtDepthLateral`/`DEPTH_SCALE`) still uses the old
+  closed-form approximation while floor/ceiling (B1, done) now uses the
+  real `calc_points`-derived geometry — the two won't align to the exact
+  pixel at cell boundaries until B2 replaces wall geometry with the same
+  real table. Not visually jarring in current verification, but worth
+  re-checking once B2 lands.
+- `computeVisibleGrid`'s transparency-gated traversal means floor/ceiling
+  can't be drawn accurately beyond a solid wall (no cell exists there) —
+  worked around with a full-viewport fallback layer underneath the
+  accurate per-cell draws (see B1 above); a real fix needs a wall-
+  visibility-independent floor/ceiling traversal, which is its own
+  B2-adjacent task.
 
 **Resolved** (2026-07-18, see port-graph.md): the red slivers at tall
 forest-texture edges and the candle flicker in the start room were *not*

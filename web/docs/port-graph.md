@@ -347,6 +347,73 @@ parity vs C build where applicable). Updated as issues close.
     (a different texture than the near side's, since each side of a real
     door is authored separately) instead of reading as still closed.
 
+  - **Phase B1 — real floor/ceiling geometry** (`src/game/perspective.ts`,
+    new). Deep-read `game/engine1.c`'s `calc_points()`/`create_tables()`
+    and `game/engine2.c`'s `fcdraw` (the real, compiled implementation —
+    confirmed via `game/CMakeLists.txt`: `libs/engine1.c` and both
+    `game/engine2.asm`/`libs/engine2.asm` are dead legacy code, present in
+    the repo but absent from every `CMakeLists.txt`; `libs/engine1.c` is a
+    smaller-viewport predecessor with a 3-field `T_FLOOR_MAP`, no
+    `txtrofs`, `VIEW3D_X=2`/`VIEW3D_Z=4` instead of the real `4`/`5`).
+    Key finding: `calc_points()` is a real iterative, integer-truncating
+    geometric decay (`v = (int)(v - v/FACTOR_3D)` applied to running x/y
+    seeds each depth step, `FACTOR_3D=3.33`), not a closed-form `pow` —
+    this port's earlier `DEPTH_SCALE = 1 - 1/3.33` closed-form (still used
+    for wall geometry, see below) was always only an approximation of this
+    exact sequence. Second key finding: floor/ceiling textures are
+    pre-baked, screen-sized perspective art — verified against LESPRED.MAP's
+    real files (`LES1F01A/B.PCX`, `LES1F06A/B.PCX` are all 640x199;
+    `LES1C01A/B.PCX` are 640x93), matching the source's `F_YMAP_SIZE=199`/
+    `C_YMAP_SIZE≈90` constants almost exactly — and `fcdraw`'s scanline
+    table encodes a **fixed additive offset** between screen row and
+    texture row (not a ratio), meaning the real renderer blits these
+    textures at *native scale, fixed screen position*, varying only the
+    per-cell clip region (`xl`/`xr`, reprojected from the undecayed
+    near-plane lateral fan) — structurally identical to how this port
+    already clips wall side-textures. Ported the *visible result* (real
+    per-cell trapezoid + native-scale anchored draw via Canvas2D
+    clip+drawImage) rather than the DOS-era scanline-table/memcpy
+    technique itself, consistent with this phase's own "simplify the
+    technique, not the result" rule — the per-scanline table was purely a
+    DOS perf optimization for O(1) blit lookup, not part of the visible
+    behavior. `perspective.ts`'s `calcPoints`/`floorCeilBand` replace the
+    old single-stretched-image `drawFloorAndCeiling` (renamed
+    `drawFloorCeilBase`, kept as a fallback layer — see below) with a
+    per-visible-cell draw in `dungeon-view.ts`. 8 unit tests verify the
+    decay sequence against hand-computed values and the reprojection
+    formula's left/right mirror symmetry.
+    **Verified live**: the start room's ceiling now shows genuine
+    receding wood-plank perspective (previously a flat stretch) matching
+    `docs/reference/dungeon-table-scene.png`'s look; the forest floor
+    shows real converging grass-blade perspective instead of one stretched
+    image; the door-swing and save/load flows re-verified with zero
+    regressions.
+    **Known gap, worked around not fixed**: `computeVisibleGrid`
+    (`dungeon.ts`) only produces a `ViewCell` where the traversal reaches
+    it through a `SD_TRANSPARENT` side — a solid wall stops the recursion
+    entirely, so no floor/ceiling cell (and thus no accurate draw) exists
+    beyond it, unlike the real engine's minimap grid which always covers
+    the full lateral extent (`CF_XMAP_SIZE`) regardless of wall
+    solidity, letting a nearer wall simply paint over what's behind it
+    later. Fixing this needs a wall-visibility-independent floor/ceiling
+    traversal — its own B2-adjacent task, not attempted here. Instead,
+    `drawFloorCeilBase` (the old single-stretched-image logic, using the
+    nearest center-column cell's texture) is drawn first as a full-
+    viewport background layer, and the new accurate per-cell trapezoids
+    are layered on top wherever a real cell exists — this was necessary
+    because an early version that *only* drew the accurate per-cell
+    layer left a visible black gap (a missing-ceiling cell's fallback
+    fill painting a large flat-colored wedge into a region a `docs/
+    reference/*.png` comparison showed should be fully wood-paneled).
+    Also NOT ported: `check_autofade`'s distance-fog fade (baked into
+    floor/ceiling textures on first use in the real engine) — noted as a
+    B3-adjacent follow-up.
+    Also NOT changed: wall geometry (`rectAtDepthLateral`/`DEPTH_SCALE`)
+    still uses the old closed-form approximation — B2's explicit scope,
+    not B1's. The two systems may not align to the exact pixel at cell
+    boundaries until B2 lands; not visually jarring in current
+    verification, flagged in EXECUTION-PLAN.md to re-check later.
+
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
 | C source | Purpose | Planned TS home | Status |
