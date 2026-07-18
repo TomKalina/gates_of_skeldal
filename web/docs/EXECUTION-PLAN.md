@@ -201,10 +201,14 @@ global deploy conventions.
 
 ## Current known cosmetic debts (fix opportunistically in phase B)
 
-- Red slivers at tall forest-texture edges outside the door (LES1W01A/02A —
-  not a colorkey issue, likely B2 stretching).
 - Niche/table texture stretched to cell rect instead of native-scale
   anchored (B2's `plac`).
-- Hardcoded second colorkey index 0 for niche/door textures — works for
-  LESPRED.MAP, known-wrong for SKRETI.MAP (index 175); revisit when D3
-  makes other maps reachable.
+- Hardcoded second colorkey index 0 for niche/door/side-wall textures —
+  works for LESPRED.MAP, known-wrong for SKRETI.MAP (index 175); revisit
+  when D3 makes other maps reachable.
+
+**Resolved** (2026-07-18, see port-graph.md): the red slivers at tall
+forest-texture edges and the candle flicker in the start room were *not*
+B2 stretching — both were colorkey bugs (left/right bank missing its
+second reserved index; the niche-animation double-key only covering the
+map-load-time frame instead of the whole cycle).
