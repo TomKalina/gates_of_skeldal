@@ -29,6 +29,13 @@ export const SD_PLAY_IMPS = 0x2;
 export const SD_TRANSPARENT = 0x80;
 export const SD_PRIM_VIS = 0x200;
 export const SD_SEC_VIS = 0x2000;
+// do_action()'s trailing forward, verified set on both the sector 14 and
+// sector 15 sides of the real door: `if (q->flags & SD_APPLY_2ND &&
+// s->step_next[direct]) do_action(action_numb, s->step_next[direct],
+// (direct+2)&3, flags, 1);` — after acting on one side, the same action
+// replays on the *opposite* side of the sector across it, keeping a
+// mirrored door pair in sync (open one face, the far face opens too).
+export const SD_APPLY_2ND = 0x400000;
 
 // `oblouk` (TSTENA byte offset 2, game/globals.h's struct tstena) packs
 // several unrelated sub-fields into one byte; builder.c reads them as
@@ -70,18 +77,40 @@ export interface MapSide {
   action: number;
 }
 
-// A_OPEN_CLOSE toggle: swap the door's animation frame between closed and
-// open, and its passability to match. Mutates the side in place — this
-// port treats a parsed DungeonMap as live session state, not immutable
-// data, the same way character stats mutate in place during chargen.
-export function toggleDoor(side: MapSide): void {
-  if (side.action !== A_OPEN_CLOSE) return;
+// Applies one side's half of an A_OPEN_CLOSE toggle: swap its animation
+// frame between closed and open, and its passability to match. `opening`
+// is passed in (not re-derived from this side's own current state) so a
+// mirrored pair — see toggleDoor() below — ends up agreeing even if the
+// two sides' frame sequences don't happen to start at the same secAnim
+// value.
+function applyDoorState(side: MapSide, opening: boolean): void {
   const lowNibble = side.secAnim & 0xf;
-  const currentOffset = side.secAnim >> 4;
-  const opening = currentOffset !== DOOR_OPEN_FRAME_OFFSET;
   side.secAnim = ((opening ? DOOR_OPEN_FRAME_OFFSET : DOOR_CLOSED_FRAME_OFFSET) << 4) | lowNibble;
   if (opening) side.flags &= ~SD_PLAY_IMPS;
   else side.flags |= SD_PLAY_IMPS;
+}
+
+// A_OPEN_CLOSE toggle for the side at (sector, direction), plus its
+// mirrored opposite side if SD_APPLY_2ND is set (see the constant's own
+// comment) — verified against the real sector 14/15 door, where both
+// sides carry the flag, so opening it from either side opens both.
+// Mutates the map's sides in place — this port treats a parsed DungeonMap
+// as live session state, not immutable data, the same way character
+// stats mutate in place during chargen.
+export function toggleDoor(map: DungeonMap, sector: number, direction: number): void {
+  const side = sideAt(map, sector, direction);
+  if (!side || side.action !== A_OPEN_CLOSE) return;
+
+  const opening = (side.secAnim >> 4) !== DOOR_OPEN_FRAME_OFFSET;
+  applyDoorState(side, opening);
+
+  if (side.flags & SD_APPLY_2ND) {
+    const mirrorSector = map.sectors[sector]?.stepNext[direction];
+    if (mirrorSector !== undefined) {
+      const mirrorSide = sideAt(map, mirrorSector, (direction + 2) & 3);
+      if (mirrorSide && mirrorSide.action === A_OPEN_CLOSE) applyDoorState(mirrorSide, opening);
+    }
+  }
 }
 
 export interface MapSector {

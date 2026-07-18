@@ -293,6 +293,19 @@ parity vs C build where applicable). Updated as issues close.
     outside — `LES1W01A/02A.PCX` don't use index 0 or 1 as a colorkey at
     all (checked directly), so this isn't the same bug; source not yet
     investigated.
+  - **Real bug, fixed**: `toggleDoor()` originally only mutated the clicked
+    side, so walking through and looking back showed the door still
+    closed. `do_action()`'s real trailing behavior — `if (q->flags &
+    SD_APPLY_2ND && s->step_next[direct]) do_action(action_numb,
+    s->step_next[direct], (direct+2)&3, flags, 1)` — replays the same
+    action on the *opposite* side of the sector across it; both sides of
+    this exact door carry `SD_APPLY_2ND`, confirmed by decoding the raw
+    flags. `toggleDoor(map, sector, direction)` now takes the map and
+    mirrors the open/closed state onto that opposite side too when the
+    flag is set. Verified live: opening the door, walking through, turning
+    around — the far side now shows its own correctly-swung-open door art
+    (a different texture than the near side's, since each side of a real
+    door is authored separately) instead of reading as still closed.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 

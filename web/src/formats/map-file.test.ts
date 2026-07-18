@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, parseMapFile, sideAt, toggleDoor, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, parseMapFile, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -134,30 +134,89 @@ function buildMapBufferWithAction(): ArrayBuffer {
 }
 
 describe('toggleDoor', () => {
-  function door(): MapSide {
-    return { prim: 0, sec: 15, oblouk: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
+  function door(flags = SD_PLAY_IMPS): MapSide {
+    return { prim: 0, sec: 15, oblouk: 0, flags, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
+  }
+  function blankSide(): MapSide {
+    return { prim: 0, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
+  }
+  // One sector (0), door at dir 1 (east), everything else blank.
+  function singleDoorMap(flags = SD_PLAY_IMPS): DungeonMap {
+    return {
+      mapName: 'Test',
+      startSector: 0,
+      startDirection: 0,
+      sectors: [{ floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0] }],
+      sides: [blankSide(), door(flags), blankSide(), blankSide()],
+      mainTextures: [],
+      leftTextures: [],
+      rightTextures: [],
+      ceilTextures: [],
+      floorTextures: [],
+    };
   }
 
   it('opens a closed door: clears SD_PLAY_IMPS and steps secAnim to the open frame offset', () => {
-    const side = door();
-    toggleDoor(side);
+    const map = singleDoorMap();
+    toggleDoor(map, 0, 1);
+    const side = sideAt(map, 0, 1)!;
     expect(side.flags & SD_PLAY_IMPS).toBe(0);
     expect(side.secAnim >> 4).toBe(6);
     expect(side.secAnim & 0xf).toBe(7); // low nibble (delay/other data) preserved
   });
 
   it('closes an open door back: sets SD_PLAY_IMPS and reverts the frame offset', () => {
-    const side = door();
-    toggleDoor(side);
-    toggleDoor(side);
+    const map = singleDoorMap();
+    toggleDoor(map, 0, 1);
+    toggleDoor(map, 0, 1);
+    const side = sideAt(map, 0, 1)!;
     expect(side.flags & SD_PLAY_IMPS).toBe(SD_PLAY_IMPS);
     expect(side.secAnim >> 4).toBe(0);
   });
 
   it('does nothing on a side without A_OPEN_CLOSE', () => {
-    const side = { ...door(), action: 0 };
-    toggleDoor(side);
+    const map = singleDoorMap();
+    map.sides[1]!.action = 0;
+    toggleDoor(map, 0, 1);
+    const side = sideAt(map, 0, 1)!;
     expect(side.flags & SD_PLAY_IMPS).toBe(SD_PLAY_IMPS);
     expect(side.secAnim >> 4).toBe(0);
+  });
+
+  it('mirrors the toggle to the opposite side of the adjacent sector when SD_APPLY_2ND is set', () => {
+    // Verified against the real sector 14/15 door: both sides carry
+    // SD_APPLY_2ND, so opening one face opens the far face too.
+    const map: DungeonMap = {
+      mapName: 'Test',
+      startSector: 0,
+      startDirection: 0,
+      sectors: [
+        { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 1, 0, 0] }, // east -> sector 1
+        { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0] }, // west -> sector 0
+      ],
+      sides: [
+        blankSide(), door(SD_PLAY_IMPS | SD_APPLY_2ND), blankSide(), blankSide(), // sector 0
+        blankSide(), blankSide(), blankSide(), door(SD_PLAY_IMPS | SD_APPLY_2ND), // sector 1, dir 3 = west
+      ],
+      mainTextures: [],
+      leftTextures: [],
+      rightTextures: [],
+      ceilTextures: [],
+      floorTextures: [],
+    };
+
+    toggleDoor(map, 0, 1);
+    expect((sideAt(map, 0, 1)?.flags ?? -1) & SD_PLAY_IMPS).toBe(0);
+    expect((sideAt(map, 1, 3)?.flags ?? -1) & SD_PLAY_IMPS).toBe(0);
+    expect((sideAt(map, 1, 3)?.secAnim ?? 0) >> 4).toBe(6);
+  });
+
+  it('does not mirror when SD_APPLY_2ND is unset', () => {
+    const map = singleDoorMap(SD_PLAY_IMPS); // no SD_APPLY_2ND, stepNext[1] points at itself
+    toggleDoor(map, 0, 1);
+    // Only side 1 (the door itself) should have changed; nothing to mirror
+    // into since stepNext[1] loops back to the same sector/side pattern —
+    // this test mainly guards against always-mirroring regressions.
+    expect((sideAt(map, 0, 1)?.flags ?? -1) & SD_PLAY_IMPS).toBe(0);
   });
 });

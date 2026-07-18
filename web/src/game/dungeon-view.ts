@@ -1,5 +1,5 @@
 import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type ViewCell } from './dungeon';
-import { sideAt, toggleDoor } from '../formats/map-file';
+import { toggleDoor } from '../formats/map-file';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
@@ -458,11 +458,8 @@ export function runDungeonView(
       return rectContains(doorRect, x, y);
     });
     if (clickedDoor) {
-      const side = sideAt(state.map, clickedDoor.sector, state.direction);
-      if (side) {
-        toggleDoor(side);
-        draw();
-      }
+      toggleDoor(state.map, clickedDoor.sector, state.direction);
+      draw();
       return;
     }
 
