@@ -127,7 +127,7 @@ const EMPTY_TEXTURE_NAME = 'EMPTY.PCX';
 function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
-  transparentIndex?: number,
+  transparentIndex?: number | number[],
   doubleKeyIndices?: ReadonlySet<number>,
 ): ReadonlyMap<number, ImageData> {
   const textures = new Map<number, ImageData>();
@@ -136,8 +136,12 @@ function loadTextureSet(
     const raw = archive.extract(name);
     if (!raw) return;
     const key = i + 1;
-    const useDoubleKey = transparentIndex !== undefined && doubleKeyIndices?.has(key);
-    const options = useDoubleKey ? { transparentIndex: [0, transparentIndex] } : transparentIndex !== undefined ? { transparentIndex } : {};
+    const options =
+      typeof transparentIndex === 'number' && doubleKeyIndices?.has(key)
+        ? { transparentIndex: [0, transparentIndex] }
+        : transparentIndex !== undefined
+          ? { transparentIndex }
+          : {};
     textures.set(key, pcxToImageData(decodePcx(raw, options)));
   });
   return textures;
@@ -149,6 +153,21 @@ function loadTextureSet(
 // (clearly the reserved background), never in between. Floor/ceiling strips
 // don't use this convention (confirmed full-bleed).
 const WALL_TRANSPARENT_INDEX = 1;
+
+// The left/right ("B"/"C") side-wall texture set additionally reserves index
+// 0 as a second, always-on background matte — unlike the main bank (where
+// a second index is only reserved for specific niche/door textures, see
+// below), every side-wall asset checked reserves it, at whatever share it
+// happens to need (0% up to ~10%): confirmed solid-color matte via direct
+// decode on the forest scene's LES1W01B/C.PCX and LES1W02B/C.PCX (the
+// "trees are upside down" report turned out to be this: the raw art is
+// correctly oriented, but index 0's un-punched red bled through in gaps
+// between trunks) and, independently, on an indoor door's side view
+// (LES1A05B.PCX, LES1A01B.PCX) showing the same matte behind the door gap.
+// Low-single-digit shares (e.g. LES1A11C.PCX at 0.1%) show no visible red
+// at all once punched, so applying this unconditionally across the whole
+// bank is safe.
+const SIDE_WALL_TRANSPARENT_INDICES = [0, WALL_TRANSPARENT_INDEX];
 
 // A niche-flagged side's own front-wall texture (see dungeon.ts's
 // frontWallFlipped) reserves a *second* colorkey index (0) on top of the
@@ -165,11 +184,22 @@ const WALL_TRANSPARENT_INDEX = 1;
 // just the two ends. Only the main-texture set needs this: both niches and
 // doors only ever render through draw_basic_sector's front-facing branch
 // (dirs[1]), never as a left/right side wall.
+//
+// The niche branch originally only added `prim + (primAnim >> 4)` — the
+// single frame that happened to be current at map-load time — instead of
+// every frame in the cycle. The start room's table has a genuinely
+// animated candle (SD_PRIM_ANIM, 4 frames), so only 1 of its 4 textures
+// ever got the second colorkey; the other 3 flashed their un-punched red
+// background on screen as the animation cycled through them — this was
+// the "occasional red flicker near the candle" report. Fixed by covering
+// the whole frame range (primAnim's low nibble = frame count), same as
+// the door branch already did.
 function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> {
   const indices = new Set<number>();
   for (const side of map.sides) {
     if ((side.oblouk & SD_HAS_NICHE) !== 0 && side.prim !== 0) {
-      indices.add(side.prim + (side.primAnim >> 4));
+      const frameCount = side.primAnim & 0xf;
+      for (let offset = 0; offset <= frameCount; offset++) indices.add(side.prim + offset);
     }
     if (side.action === A_OPEN_CLOSE && side.sec !== 0) {
       const frameCount = side.secAnim & 0xf;
@@ -183,8 +213,8 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextu
   const doubleKey = doubleColorkeyMainTextureIndices(map);
   return {
     main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, doubleKey),
-    left: loadTextureSet(archive, map.leftTextures, WALL_TRANSPARENT_INDEX),
-    right: loadTextureSet(archive, map.rightTextures, WALL_TRANSPARENT_INDEX),
+    left: loadTextureSet(archive, map.leftTextures, SIDE_WALL_TRANSPARENT_INDICES),
+    right: loadTextureSet(archive, map.rightTextures, SIDE_WALL_TRANSPARENT_INDICES),
     floor: loadTextureSet(archive, map.floorTextures),
     ceil: loadTextureSet(archive, map.ceilTextures),
   };

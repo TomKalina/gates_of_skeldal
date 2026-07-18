@@ -297,12 +297,42 @@ parity vs C build where applicable). Updated as issues close.
     Clicking is a plain front-wall-rect hit-test against whichever cells in
     the current visible grid have `frontIsDoor` set — not the real per-pixel
     mask. Verified live: walking to the door, clicking it open, and walking
-    through into the forest all work with zero console errors. One
-    unrelated cosmetic artifact spotted during this same verification: small
-    red slivers at the top corners of the forest side-wall textures once
-    outside — `LES1W01A/02A.PCX` don't use index 0 or 1 as a colorkey at
-    all (checked directly), so this isn't the same bug; source not yet
-    investigated.
+    through into the forest all work with zero console errors.
+  - **Two real bugs, fixed, behind a user report of "the trees are upside
+    down" plus "an occasional red flicker near the candle"**: neither was
+    actually about orientation. Investigated by grid-lining both the raw
+    decoded PCX and a live screenshot at the exact same scale and overlaying
+    them on known texture-content landmarks (the canopy, a branch, the
+    undergrowth) — pixel-for-pixel matches, proving `LES1W01A/02A.PCX` (and
+    every other wall texture) render in their correct, un-flipped
+    orientation. What actually reads as "wrong" is a genuine colorkey bug on
+    two independent code paths:
+    1. The left/right ("B"/"C") side-wall texture bank reserves palette
+       index 0 as a *second* background matte on top of the usual index-1
+       colorkey (`main.ts`'s `WALL_TRANSPARENT_INDEX`) — same double-key
+       concept as a niche prop, but applying to the whole bank rather than
+       conditionally. Confirmed via direct decode on the forest scene
+       (`LES1W01B/C.PCX`, `LES1W02B/C.PCX`, the tree-trunk side walls just
+       outside the new door) and, independently, on an indoor door's side
+       view (`LES1A05B.PCX`, `LES1A01B.PCX`) showing the same red matte
+       behind the door gap — confirming this isn't forest-specific. Index
+       0's share is a continuous 0%–10% across the left/right bank (not the
+       clean bimodal split index 1 has), but every sampled file, even at
+       low single digits, turned out to be real background matte with no
+       genuine content lost — so `main.ts` now always decodes the left/right
+       banks with `[0, WALL_TRANSPARENT_INDEX]` (`SIDE_WALL_TRANSPARENT_INDICES`).
+    2. The niche-prop double-colorkey (previous entry above) only added the
+       texture index that happened to be the *current* animation frame at
+       map-load time (`side.prim + (side.primAnim >> 4)`), not every frame
+       in the cycle. The start room's table has a genuinely animated candle
+       (`SD_PRIM_ANIM`, 4 frames), so 3 of its 4 textures never got the
+       second colorkey and flashed their un-punched red background as the
+       animation cycled through them — this was the reported "flicker".
+       `doubleColorkeyMainTextureIndices` now walks the whole frame range
+       (`primAnim`'s low nibble = frame count), mirroring how the door
+       branch already handled its own frame sequence. Verified live by
+       sampling 8 frames across the candle's animation cycle — no red in
+       any of them, matches the reference screenshot's plain-wood room.
   - **Real bug, fixed**: `toggleDoor()` originally only mutated the clicked
     side, so walking through and looking back showed the door still
     closed. `do_action()`'s real trailing behavior — `if (q->flags &
