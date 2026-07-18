@@ -3,6 +3,8 @@ import { toggleDoor } from '../formats/map-file';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
+import { stepAllAnimations } from './animation';
+import { pumpTick } from '../platform/events';
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
@@ -528,16 +530,35 @@ export function runDungeonView(
     draw();
   }
 
+  // realgame.c's calc_animations() runs once per game tick, driven by the
+  // real DOS timer interrupt; this port doesn't have that exact frequency
+  // on hand, so TICK_MS is an approximation picked for a natural-looking
+  // door swing (7 frames over ~0.7s), not a measured constant. Drives the
+  // event kernel's own per-tick broadcast (platform/events.ts's pumpTick,
+  // Phase A1) alongside the animation step, per EXECUTION-PLAN.md's A3.
+  const TICK_MS = 100;
+  let animationFrameId = 0;
+  let lastTickAt = 0;
+  function tickLoop(now: number): void {
+    animationFrameId = requestAnimationFrame(tickLoop);
+    if (now - lastTickAt < TICK_MS) return;
+    lastTickAt = now;
+    pumpTick();
+    if (stepAllAnimations(state.map)) draw();
+  }
+
   function dispose(): void {
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('mousemove', onMouseMove);
     window.removeEventListener('keydown', onKeydown);
+    cancelAnimationFrame(animationFrameId);
   }
 
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);
   window.addEventListener('keydown', onKeydown);
   draw();
+  animationFrameId = requestAnimationFrame(tickLoop);
 
   return { result, dispose };
 }

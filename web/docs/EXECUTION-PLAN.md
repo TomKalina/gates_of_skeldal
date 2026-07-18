@@ -101,13 +101,33 @@ further — this is its own multi-session effort. Split accordingly:
   opcodes incrementally, one at a time, verified against a real map
   reference that uses it, rather than all ~30 at once.
 
-### A3. Per-tick side animation
-Port the prim/sec animation stepping (`realgame.c` ~740–790: `SD_PRIM_FORV`
-/`SD_SEC_FORV`, `prim_anim`/`sec_anim` nibble counters, `SD_*_GAB`
-ping-pong). Replace `toggleDoor`'s instant swap.
-**Done when**: clicking the door plays the real 7-frame swing
-(LES1A11A→17A), passability flips at the correct frame, `SD_AUTOANIM`
-sides (e.g. the start sector's swinging bracket) animate continuously.
+### A3. Per-tick side animation — **DONE** (2026-07-18)
+Ported `calc_animations()`'s prim/sec stepping (`game/animation.ts`:
+`stepSide`/`stepAllAnimations`) — both branches (one-shot clamped, e.g. a
+door; continuous wrap/ping-pong via `SD_*_GAB`, e.g. an idling
+decoration), frame count read from each side's own `secAnim`/`primAnim`
+low nibble rather than a hardcoded offset. `toggleDoor()` now only flips
+`SD_PRIM_FORV`/`SD_SEC_FORV` (matching `do_action`'s `A_OPEN_CLOSE` case);
+the stepper carries the swing to completion and flips `SD_PLAY_IMPS`
+exactly on the tick it finishes, not instantly. Driven once per ~100ms
+(approximated — the real DOS timer-interrupt rate wasn't easy to pin down
+from source, so this is a "looks natural" pick, not a measured constant)
+by `dungeon-view.ts`'s own `requestAnimationFrame` loop, which also feeds
+into A1's `pumpTick()`. 10 unit tests; verified live — the door genuinely
+swings through intermediate frames (visibly ajar mid-click, forest peeking
+through the gap) instead of snapping open.
+
+**Scope correction**: the "Done when" originally expected `SD_AUTOANIM`
+sides (e.g. the start sector's decorative bracket, which does have
+`SD_PRIM_ANIM`+`SD_AUTOANIM` set) to "animate continuously" on their own.
+Traced `SD_AUTOANIM`'s real meaning: `realgame.c`'s `a_touch(sector, dir)`
+— the player-touched-this-wall handler — auto-fires `A_OPEN_CLOSE` when a
+touched side has `SD_AUTOANIM` set. It's not "always animating," it's
+"reverses direction when bumped into," and needs `a_touch` itself (wired
+from movement collision, i.e. walking into a blocked wall) — a new input
+path this port doesn't have yet. Correctly out of scope for A3 itself;
+`a_touch` is natural A2a/A2b-adjacent follow-up, not filed as its own
+sub-phase yet.
 
 ## Phase B — Renderer fidelity (issue #10 remainder)
 

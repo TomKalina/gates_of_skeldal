@@ -27,8 +27,14 @@ const MAPGLOBAL_SIZE = 105;
 // Side (TSTENA) flag bits relevant to rendering/movement (game/globals.h).
 export const SD_PLAY_IMPS = 0x2;
 export const SD_TRANSPARENT = 0x80;
+export const SD_PRIM_ANIM = 0x100;
 export const SD_PRIM_VIS = 0x200;
+export const SD_PRIM_GAB = 0x400;
+export const SD_PRIM_FORV = 0x800;
+export const SD_SEC_ANIM = 0x1000;
 export const SD_SEC_VIS = 0x2000;
+export const SD_SEC_GAB = 0x4000;
+export const SD_SEC_FORV = 0x8000;
 // do_action()'s trailing forward, verified set on both the sector 14 and
 // sector 15 sides of the real door: `if (q->flags & SD_APPLY_2ND &&
 // s->step_next[direct]) do_action(action_numb, s->step_next[direct],
@@ -49,16 +55,15 @@ export const SD_HAS_NICHE = 0x10;
 // realgame.c's do_action() action codes (TSTENA byte offset 15, `action`).
 // A_OPEN_CLOSE toggles a door: verified against LESPRED.MAP sector 14's
 // east side (mirrored with sector 15's west side) — prim=0, sec=15
-// (LES1A11A.PCX, a closed wooden door) with SD_PLAY_IMPS set; sec+6
-// (LES1A17A.PCX) is the same frame sequence's fully-open doorway (a clean
-// see-through opening once its colorkey is punched). The real engine steps
-// through all 7 frames (11A..17A) via a per-tick animation driven by
-// SD_PRIM_FORV/SD_SEC_FORV; this port simplifies to an instant toggle
-// between the closed (offset 0) and open (offset 6) ends, matching the
-// project's existing "no smooth step/turn animation" precedent.
+// (LES1A11A.PCX, a closed wooden door) with SD_PLAY_IMPS set. secAnim's
+// low nibble (7 here) is the frame count (`pk`/`sk` in calc_animations,
+// realgame.c) — the real engine steps the upper nibble through it one
+// frame per tick (LES1A11A..17A.PCX) via SD_PRIM_FORV/SD_SEC_FORV; see
+// game/animation.ts (Phase A3) for that stepper. This function only
+// starts/reverses the swing (flips the FORV direction flags, matching
+// do_action's A_OPEN_CLOSE case exactly) — it doesn't touch the frame or
+// passability directly; those change gradually as the animation steps.
 export const A_OPEN_CLOSE = 3;
-export const DOOR_CLOSED_FRAME_OFFSET = 0;
-export const DOOR_OPEN_FRAME_OFFSET = 6;
 
 export interface MapSide {
   prim: number;
@@ -77,38 +82,35 @@ export interface MapSide {
   action: number;
 }
 
-// Applies one side's half of an A_OPEN_CLOSE toggle: swap its animation
-// frame between closed and open, and its passability to match. `opening`
-// is passed in (not re-derived from this side's own current state) so a
-// mirrored pair — see toggleDoor() below — ends up agreeing even if the
-// two sides' frame sequences don't happen to start at the same secAnim
-// value.
-function applyDoorState(side: MapSide, opening: boolean): void {
-  const lowNibble = side.secAnim & 0xf;
-  side.secAnim = ((opening ? DOOR_OPEN_FRAME_OFFSET : DOOR_CLOSED_FRAME_OFFSET) << 4) | lowNibble;
-  if (opening) side.flags &= ~SD_PLAY_IMPS;
-  else side.flags |= SD_PLAY_IMPS;
+// do_action's A_OPEN_CLOSE case exactly: `if (!(q->flags & SD_PRIM_ANIM))
+// q->flags ^= SD_PRIM_FORV | SD_SEC_FORV; else q->flags ^= SD_SEC_FORV;` —
+// a continuously-cycling side (SD_PRIM_ANIM set, e.g. an idle swinging
+// decoration) only reverses its secondary channel; a one-shot side (an
+// ordinary door, SD_PRIM_ANIM unset) reverses both.
+function reverseDoorDirection(side: MapSide): void {
+  if ((side.flags & SD_PRIM_ANIM) === 0) side.flags ^= SD_PRIM_FORV | SD_SEC_FORV;
+  else side.flags ^= SD_SEC_FORV;
 }
 
 // A_OPEN_CLOSE toggle for the side at (sector, direction), plus its
 // mirrored opposite side if SD_APPLY_2ND is set (see the constant's own
 // comment) — verified against the real sector 14/15 door, where both
-// sides carry the flag, so opening it from either side opens both.
-// Mutates the map's sides in place — this port treats a parsed DungeonMap
-// as live session state, not immutable data, the same way character
-// stats mutate in place during chargen.
+// sides carry the flag, so opening it from either side opens both. Only
+// starts the swing; game/animation.ts's per-tick stepper carries it
+// through to completion. Mutates the map's sides in place — this port
+// treats a parsed DungeonMap as live session state, not immutable data,
+// the same way character stats mutate in place during chargen.
 export function toggleDoor(map: DungeonMap, sector: number, direction: number): void {
   const side = sideAt(map, sector, direction);
   if (!side || side.action !== A_OPEN_CLOSE) return;
 
-  const opening = (side.secAnim >> 4) !== DOOR_OPEN_FRAME_OFFSET;
-  applyDoorState(side, opening);
+  reverseDoorDirection(side);
 
   if (side.flags & SD_APPLY_2ND) {
     const mirrorSector = map.sectors[sector]?.stepNext[direction];
     if (mirrorSector !== undefined) {
       const mirrorSide = sideAt(map, mirrorSector, (direction + 2) & 3);
-      if (mirrorSide && mirrorSide.action === A_OPEN_CLOSE) applyDoorState(mirrorSide, opening);
+      if (mirrorSide && mirrorSide.action === A_OPEN_CLOSE) reverseDoorDirection(mirrorSide);
     }
   }
 }

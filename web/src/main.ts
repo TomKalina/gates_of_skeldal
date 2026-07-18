@@ -7,7 +7,7 @@ import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
-import { A_OPEN_CLOSE, DOOR_CLOSED_FRAME_OFFSET, DOOR_OPEN_FRAME_OFFSET, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
+import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { decodePcx, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
@@ -154,12 +154,15 @@ const WALL_TRANSPARENT_INDEX = 1;
 // frontWallFlipped) reserves a *second* colorkey index (0) on top of the
 // usual wall/decoration one (1) — verified against LES1A23A.PCX, where
 // index 0 is a separately-painted red "background" covering 27% of the
-// image, distinct from index 1's colorkey. A door's open-frame texture
-// needs the same treatment — verified against LES1A17A.PCX (the sector
-// 14/15 door's fully-open frame): its doorway opening is index 0 too, 20%
-// of the image, alongside the usual index-1 colorkey around the frame
+// image, distinct from index 1's colorkey. A door's frame sequence needs
+// the same treatment — verified against LES1A17A.PCX (the sector 14/15
+// door's fully-open frame): its doorway opening is index 0 too, 20% of the
+// image, alongside the usual index-1 colorkey around the frame
 // (LES1A11A.PCX, the closed frame, only uses index 1 — there's no opening
-// to punch out yet). Only the main-texture set needs this: both niches and
+// to punch out yet). Since the door now animates through every
+// intermediate frame (game/animation.ts, Phase A3), every frame in its
+// sequence (secAnim's low nibble = frame count) gets the double key, not
+// just the two ends. Only the main-texture set needs this: both niches and
 // doors only ever render through draw_basic_sector's front-facing branch
 // (dirs[1]), never as a left/right side wall.
 function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> {
@@ -169,8 +172,8 @@ function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> 
       indices.add(side.prim + (side.primAnim >> 4));
     }
     if (side.action === A_OPEN_CLOSE && side.sec !== 0) {
-      indices.add(side.sec + DOOR_CLOSED_FRAME_OFFSET);
-      indices.add(side.sec + DOOR_OPEN_FRAME_OFFSET);
+      const frameCount = side.secAnim & 0xf;
+      for (let offset = 0; offset <= frameCount; offset++) indices.add(side.sec + offset);
     }
   }
   return indices;

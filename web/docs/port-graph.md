@@ -275,13 +275,23 @@ parity vs C build where applicable). Updated as issues close.
     (`sec`/`secAnim`, gated by `SD_SEC_VIS`) — prim is 0 — which this port
     had never read at all before (`dungeon.ts`'s `visibleSecTexture`,
     `ViewCell.frontSecTexture`). The closed frame is `LES1A11A.PCX`; the
-    real engine steps through a full 7-frame swing animation
-    (`LES1A11A`..`17A.PCX`) per-tick via `SD_PRIM_FORV`/`SD_SEC_FORV`, which
-    this port simplifies to an instant toggle between the closed (offset 0)
-    and fully-open (offset 6) ends (`toggleDoor()` in `map-file.ts`),
-    matching the existing "no smooth step/turn animation" precedent —
-    flipping `SD_PLAY_IMPS` together with the frame so the doorway becomes
-    walkable exactly when it looks open. The open frame's doorway opening
+    real engine steps through the full 7-frame swing (`LES1A11A`..`17A.PCX`)
+    one frame per tick via `SD_PRIM_FORV`/`SD_SEC_FORV` (`realgame.c`'s
+    `calc_animations()`) — **ported for real in Phase A3** (`game/
+    animation.ts`'s `stepSide`/`stepAllAnimations`, driven once per ~100ms
+    tick by `dungeon-view.ts`'s own `requestAnimationFrame` loop, which also
+    feeds the Phase A1 event kernel's `pumpTick()`). `toggleDoor()` now only
+    flips the `FORV` direction flags (matching `do_action`'s `A_OPEN_CLOSE`
+    case exactly); the frame count comes from `secAnim`'s low nibble (`sk`
+    in the source), not a hardcoded offset, so it isn't tied to this one
+    door's specific 7-frame length. Passability (`SD_PLAY_IMPS`) flips
+    exactly on the tick the animation reaches its open/closed end — not
+    instantly on click — matching the *timing* of the source's own
+    `flag_map` restore mechanism, though not its generic mechanism (see
+    `animation.ts`'s header comment for why: the source computes the
+    restored flags from the triggering action's own parameter via
+    `actn_flags()`, which needs the untraced input-to-`do_action` call
+    path this port doesn't have). The open frame's doorway opening
     is index-0 colorkey, same double-colorkey pattern as the niche table
     (`main.ts`'s `doubleColorkeyMainTextureIndices`, extended to cover both).
     Clicking is a plain front-wall-rect hit-test against whichever cells in

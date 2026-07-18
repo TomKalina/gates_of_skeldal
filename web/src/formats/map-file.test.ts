@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, parseMapFile, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, type DungeonMap, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, parseMapFile, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -134,6 +134,9 @@ function buildMapBufferWithAction(): ArrayBuffer {
 }
 
 describe('toggleDoor', () => {
+  // toggleDoor only starts/reverses the swing (flips FORV); the actual
+  // frame stepping and passability sync is game/animation.ts's job
+  // (Phase A3) — see animation.test.ts for that.
   function door(flags = SD_PLAY_IMPS): MapSide {
     return { prim: 0, sec: 15, oblouk: 0, flags, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
   }
@@ -156,31 +159,36 @@ describe('toggleDoor', () => {
     };
   }
 
-  it('opens a closed door: clears SD_PLAY_IMPS and steps secAnim to the open frame offset', () => {
+  it('a side with SD_PRIM_ANIM unset (an ordinary door) flips both SD_PRIM_FORV and SD_SEC_FORV', () => {
     const map = singleDoorMap();
     toggleDoor(map, 0, 1);
     const side = sideAt(map, 0, 1)!;
-    expect(side.flags & SD_PLAY_IMPS).toBe(0);
-    expect(side.secAnim >> 4).toBe(6);
-    expect(side.secAnim & 0xf).toBe(7); // low nibble (delay/other data) preserved
+    expect(side.flags & SD_PRIM_FORV).toBe(SD_PRIM_FORV);
+    expect(side.flags & SD_SEC_FORV).toBe(SD_SEC_FORV);
   });
 
-  it('closes an open door back: sets SD_PLAY_IMPS and reverts the frame offset', () => {
+  it('toggling again reverses direction back', () => {
     const map = singleDoorMap();
     toggleDoor(map, 0, 1);
     toggleDoor(map, 0, 1);
     const side = sideAt(map, 0, 1)!;
-    expect(side.flags & SD_PLAY_IMPS).toBe(SD_PLAY_IMPS);
-    expect(side.secAnim >> 4).toBe(0);
+    expect(side.flags & SD_PRIM_FORV).toBe(0);
+    expect(side.flags & SD_SEC_FORV).toBe(0);
+  });
+
+  it('a continuously-animating side (SD_PRIM_ANIM set) only flips SD_SEC_FORV', () => {
+    const map = singleDoorMap(SD_PLAY_IMPS | SD_PRIM_ANIM);
+    toggleDoor(map, 0, 1);
+    const side = sideAt(map, 0, 1)!;
+    expect(side.flags & SD_PRIM_FORV).toBe(0);
+    expect(side.flags & SD_SEC_FORV).toBe(SD_SEC_FORV);
   });
 
   it('does nothing on a side without A_OPEN_CLOSE', () => {
     const map = singleDoorMap();
     map.sides[1]!.action = 0;
     toggleDoor(map, 0, 1);
-    const side = sideAt(map, 0, 1)!;
-    expect(side.flags & SD_PLAY_IMPS).toBe(SD_PLAY_IMPS);
-    expect(side.secAnim >> 4).toBe(0);
+    expect(sideAt(map, 0, 1)?.flags).toBe(SD_PLAY_IMPS);
   });
 
   it('mirrors the toggle to the opposite side of the adjacent sector when SD_APPLY_2ND is set', () => {
@@ -206,9 +214,8 @@ describe('toggleDoor', () => {
     };
 
     toggleDoor(map, 0, 1);
-    expect((sideAt(map, 0, 1)?.flags ?? -1) & SD_PLAY_IMPS).toBe(0);
-    expect((sideAt(map, 1, 3)?.flags ?? -1) & SD_PLAY_IMPS).toBe(0);
-    expect((sideAt(map, 1, 3)?.secAnim ?? 0) >> 4).toBe(6);
+    expect((sideAt(map, 0, 1)?.flags ?? 0) & SD_SEC_FORV).toBe(SD_SEC_FORV);
+    expect((sideAt(map, 1, 3)?.flags ?? 0) & SD_SEC_FORV).toBe(SD_SEC_FORV);
   });
 
   it('does not mirror when SD_APPLY_2ND is unset', () => {
@@ -217,6 +224,6 @@ describe('toggleDoor', () => {
     // Only side 1 (the door itself) should have changed; nothing to mirror
     // into since stepNext[1] loops back to the same sector/side pattern —
     // this test mainly guards against always-mirroring regressions.
-    expect((sideAt(map, 0, 1)?.flags ?? -1) & SD_PLAY_IMPS).toBe(0);
+    expect((sideAt(map, 0, 1)?.flags ?? 0) & SD_SEC_FORV).toBe(SD_SEC_FORV);
   });
 });
