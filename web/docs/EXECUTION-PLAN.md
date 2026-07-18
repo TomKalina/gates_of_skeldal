@@ -67,16 +67,30 @@ creation, monster spawns, conditional jumps, dialogue/book triggers, a
 `load_macros`/`read_macro_item` and the opcode list before estimating
 further — this is its own multi-session effort. Split accordingly:
 
-- **A2a. Complete `do_action` + action forwarding — DONE** (2026-07-18,
-  the `SD_APPLY_2ND` half; see commit "mirror door toggle to the opposite
-  side"). Remaining from this sub-scope: `A_RUN_PRIM`/`A_HIDE_PRIM`/
-  `A_SHOW_PRIM`/`A_SHOW_HIDE_PRIM` + the `SEC` equivalents, `A_CODELOCK_LOG*`,
-  `A_OPEN_TELEPORT`/`A_CLOSE_TELEPORT` (all read in `do_action`'s switch,
-  `game/realgame.c` — none ported yet except `A_OPEN_CLOSE`), plus
-  `SD_COPY_ACTION`/`SD_SEND_ACTION` forwarding (untested — no real map data
-  hits them yet, unlike `SD_APPLY_2ND` which had a live example).
-  `A_DISPLAY_TEXT` needs level-text decode (D4) first — stub with a
-  visible TODO marker until then, don't silently no-op.
+- **A2a. Complete `do_action` + action forwarding — mostly DONE** (2026-07-18).
+  Done: `SD_APPLY_2ND` mirroring (see commit "mirror door toggle to the
+  opposite side"); the 7 pure visibility-toggle actions —
+  `A_SHOW_PRIM`/`A_HIDE_PRIM`/`A_SHOW_HIDE_PRIM`/`A_SHOW_SEC`/`A_HIDE_SEC`/
+  `A_SHOW_HIDE_SEC`/`A_HIDE_PRIM_SEC` — in `src/game/actions.ts`
+  (`applyAction`), unit-tested against the C source's exact semantics
+  (no real map side uses any of them — a full-map scan found only
+  `A_OPEN_CLOSE` in use anywhere — so these are spec-verified with
+  synthetic fixtures, not real-map-verified, unlike this port's rendering
+  code; documented in the module's own header comment).
+  Deliberately NOT ported yet, with reasons: `A_OPEN_DOOR`/`A_CLOSE_DOOR`/
+  `A_RUN_PRIM`/`A_RUN_SEC` set animation-direction flags
+  (`SD_PRIM_FORV`/`SD_SEC_FORV`/`SD_PRIM_ANIM`/`SD_SEC_ANIM`) that only mean
+  something once A3's per-tick stepper exists to consume them — do these
+  together with A3, not before (an unconsumed flag-set is unverifiable
+  dead code). `A_OPEN_TELEPORT`/`A_CLOSE_TELEPORT` need an actual
+  teleport-on-step trigger this port doesn't have (part of A2b/gameplay
+  loop territory). `A_CODELOCK_LOG*` chain into `check_codelock_log`
+  (recursive `do_action` over `sector_tag`) — needs more design thought,
+  not yet attempted. `A_DISPLAY_TEXT` needs level-text decode (D4) first —
+  stub with a visible TODO marker when it's tackled, don't silently no-op.
+  `SD_COPY_ACTION`/`SD_SEND_ACTION` forwarding also still unported
+  (untested — no real map data hits them yet, unlike `SD_APPLY_2ND` which
+  had a live example to verify against).
 - **A2b. Macro VM interpreter** (separate, larger effort — do not start
   before A2a, A3, and ideally B1/B2 land, since several opcodes touch
   rendering/animation state those phases define): parse `A_MAPMACR`
