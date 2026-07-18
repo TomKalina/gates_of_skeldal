@@ -1,5 +1,6 @@
 import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type ViewCell } from './dungeon';
 import { sideAt, toggleDoor } from '../formats/map-file';
+import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
 
@@ -162,13 +163,6 @@ const PARTY_BOX_WIDTH = PARTY_PORTRAIT_WIDTH + (PARTY_BAR_WIDTH + PARTY_BAR_GAP)
 // column — no asset hook for that art exists yet (same gap as the chargen
 // panel), so it stays a flat fill.
 const PARTY_ROW_X = 24;
-
-const SAVE_KEY = 'skeldal:dungeon-save';
-interface DungeonSave {
-  mapName: string;
-  sector: number;
-  direction: number;
-}
 
 // TS counterpart of the first static view shown by builder.c's render_scene
 // when entering a map — every surface (front wall, receding side walls,
@@ -418,15 +412,13 @@ export function runDungeonView(
   }
 
   function saveGame(): void {
-    const save: DungeonSave = { mapName: state.map.mapName, sector: state.sector, direction: state.direction };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+    writeSave({ mapName: state.map.mapName, sector: state.sector, direction: state.direction, party });
     statusText = 'Uloženo.';
     draw();
   }
 
   function loadGame(): void {
-    const raw = localStorage.getItem(SAVE_KEY);
-    const save = raw ? (JSON.parse(raw) as DungeonSave) : null;
+    const save = readSave();
     if (!save || save.mapName !== state.map.mapName) {
       statusText = 'Nic k obnovení.';
       draw();

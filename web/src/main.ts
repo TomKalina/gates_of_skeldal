@@ -9,6 +9,7 @@ import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, DOOR_CLOSED_FRAME_OFFSET, DOOR_OPEN_FRAME_OFFSET, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { decodePcx, pcxToImageData } from './codecs/pcx';
+import { readSave } from './game/save';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
 
@@ -235,6 +236,7 @@ async function enterDungeon(
   archive: DDLArchive,
   party: readonly Character[],
   chrome: DungeonChromeAssets,
+  start?: { sector: number; direction: Direction },
 ): Promise<boolean> {
   const mapBuffer = await tryAutoLoadMap(START_MAP);
   if (!mapBuffer) return false;
@@ -243,13 +245,25 @@ async function enterDungeon(
   const textures = loadDungeonTextures(archive, map);
   const { result } = runDungeonView(
     ctx,
-    { map, sector: map.startSector, direction: map.startDirection as Direction },
+    { map, sector: start?.sector ?? map.startSector, direction: start?.direction ?? (map.startDirection as Direction) },
     textures,
     party,
     chrome,
   );
   await result; // resolves when KONEC is clicked
   return true;
+}
+
+// Obnova pozice (main menu): unlike ULOŽ/OBNOV inside an active session
+// (which only reposition the current live party), this reconstructs a
+// whole session from scratch — there's no party in memory yet, so the
+// save's own party (plain chargen-rolled stats, no equipment/combat state
+// to worry about) becomes the new active one, skipping character creation
+// entirely.
+async function loadSavedGame(ctx: CanvasRenderingContext2D, archive: DDLArchive, chrome: DungeonChromeAssets): Promise<boolean> {
+  const save = readSave();
+  if (!save || save.party.length === 0) return false;
+  return enterDungeon(ctx, archive, save.party, chrome, { sector: save.sector, direction: save.direction as Direction });
 }
 
 async function boot(): Promise<void> {
@@ -272,6 +286,14 @@ async function boot(): Promise<void> {
           showPlaceholder(ctx, `Party created: ${names} — dungeon map unavailable`);
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
+      }
+      continue;
+    }
+
+    if (selected === 1) {
+      if (!(await loadSavedGame(ctx, archive, dungeonChrome))) {
+        showPlaceholder(ctx, 'Nic k obnovení.');
+        await new Promise((resolve) => setTimeout(resolve, 1200));
       }
       continue;
     }

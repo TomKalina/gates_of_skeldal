@@ -251,11 +251,16 @@ parity vs C build where applicable). Updated as issues close.
     the same still-missing asset noted for the chargen panel) is a flat
     fill.
   - ULOŽ/OBNOV are real, not stubs: a single implicit `localStorage` slot
-    holding just `{mapName, sector, direction}` — there's no save-slot
-    picker UI, and no inventory/combat state exists yet to persist beyond
-    position. Loading from the main menu isn't wired up (`Obnova pozice` on
-    the main menu still says "not implemented yet") — quick-save/quick-load
-    only works from inside an active dungeon session for now.
+    (`src/game/save.ts`) holding `{mapName, sector, direction, party}` —
+    there's no save-slot picker UI, and no inventory/combat state exists
+    yet to persist beyond position and the party's chargen-rolled stats.
+    `Obnova pozice` on the main menu is wired to the same slot: it
+    reconstructs a whole session from scratch (no chargen) using the
+    save's own party, since unlike the in-session quick-load (which only
+    repositions the already-live party) there's no party in memory yet at
+    the main menu. Verified end-to-end live: create a character, walk
+    somewhere, save, return to the main menu, click Obnova pozice — same
+    party, same position, restored with zero console errors.
   - **Real, clickable doors**, added after a user report that there was no
     way to walk outside from the starting building. `TSTENA`'s `action`
     byte (offset 15, previously unparsed) drives `do_action()`'s action
