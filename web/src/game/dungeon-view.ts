@@ -96,28 +96,6 @@ function toDrawable(image: ImageData): HTMLCanvasElement {
   return canvas;
 }
 
-// Niche-bearing sides (see dungeon.ts's frontWallFlipped) store their
-// floor-standing prop art top-to-bottom flipped from every other wall
-// texture — verified by decoding LESPRED.MAP's start sector west wall
-// (LES1A23A.PCX) and flipping it, which turns an apparently ceiling-hung
-// bracket into a correctly-oriented table.
-const flippedBitmapCache = new WeakMap<ImageData, HTMLCanvasElement>();
-function toDrawableFlipped(image: ImageData): HTMLCanvasElement {
-  let canvas = flippedBitmapCache.get(image);
-  if (!canvas) {
-    canvas = document.createElement('canvas');
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const c = canvas.getContext('2d');
-    if (!c) throw new Error('2D canvas context unavailable');
-    c.translate(0, image.height);
-    c.scale(1, -1);
-    c.drawImage(toDrawable(image), 0, 0);
-    flippedBitmapCache.set(image, canvas);
-  }
-  return canvas;
-}
-
 function rectContains(rect: Rect, x: number, y: number): boolean {
   return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 }
@@ -348,8 +326,7 @@ export function runDungeonView(
     if (cell.frontWallTexture !== null) {
       const image = textures.main.get(cell.frontWallTexture);
       if (image) {
-        const drawable = cell.frontWallFlipped ? toDrawableFlipped(image) : toDrawable(image);
-        ctx.drawImage(drawable, rect.x, rect.y, rect.width, rect.height);
+        ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
       } else {
         ctx.fillStyle = '#553';
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
@@ -357,9 +334,7 @@ export function runDungeonView(
     }
     // Secondary slot (sec/secAnim) is a fully independent texture from prim
     // — verified against this map's sector 14/15 door, which has no prim
-    // texture at all (prim=0) and shows entirely through sec. Doesn't need
-    // frontWallFlipped's vertical flip: the door art (LES1A11A..17A.PCX)
-    // already renders right-side-up as decoded.
+    // texture at all (prim=0) and shows entirely through sec.
     if (cell.frontSecTexture !== null) {
       const image = textures.main.get(cell.frontSecTexture);
       if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);

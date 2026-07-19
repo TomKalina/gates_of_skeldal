@@ -8,7 +8,7 @@ import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
-import { decodePcx, pcxToImageData } from './codecs/pcx';
+import { decodePcx, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
@@ -124,6 +124,38 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
 // stretched white rectangle.
 const EMPTY_TEXTURE_NAME = 'EMPTY.PCX';
 
+// A subset of wall/door/decoration PCX assets are authored stored top-to-
+// bottom flipped relative to the rest — no map-data flag (oblouk/
+// SD_HAS_NICHE), PCX header field, or filename pattern predicts which ones;
+// confirmed per-file only by decoding each candidate and visually judging
+// raw vs. flipped against physical plausibility (door hinges/handles/
+// thresholds, roof-over-wall, canopy-over-roots, archway-curves-up-not-
+// down). This replaces an earlier, narrower hypothesis that tied the flip
+// to SD_HAS_NICHE (a real map-data bit, but only coincidentally correlated
+// — see git history — most of these entries have no niche flag at all,
+// and one flagged side, the animated table/candle LES1A21-24A, needed the
+// flip anyway). Verified across every non-floor/ceiling texture LESPRED.MAP
+// uses (main + left/right banks) via a systematic raw-vs-flipped visual
+// survey; a handful of near-symmetric tileable wood-plank textures were
+// genuinely ambiguous either way and left unflipped since it makes no
+// visible difference. Known-incomplete for other maps — revisit alongside
+// the double-colorkey index list (below) once D3 makes them reachable.
+const VERTICALLY_FLIPPED_TEXTURES = new Set(
+  [
+    'LES1A03A', 'LES1A03B', 'LES1A03C',
+    'LES1A04A', 'LES1A04B', 'LES1A04C',
+    'LES1A05A', 'LES1A05B', 'LES1A05C',
+    'LES1A06A', 'LES1A06B', 'LES1A06C',
+    'LES1A21A', 'LES1A22A', 'LES1A23A', 'LES1A24A',
+    'LES1W03A',
+    'LES1W15A', 'LES1W15B',
+    'LES1W16A', 'LES1W16B',
+    'LES1W18A', 'LES1W18B',
+    'LES1W19A', 'LES1W19B',
+    'PRECW07A', 'PRECW07B',
+  ].map((name) => `${name}.PCX`),
+);
+
 function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
@@ -142,7 +174,9 @@ function loadTextureSet(
         : transparentIndex !== undefined
           ? { transparentIndex }
           : {};
-    textures.set(key, pcxToImageData(decodePcx(raw, options)));
+    let image = pcxToImageData(decodePcx(raw, options));
+    if (VERTICALLY_FLIPPED_TEXTURES.has(name.toUpperCase())) image = flipImageDataVertically(image);
+    textures.set(key, image);
   });
   return textures;
 }
@@ -169,8 +203,9 @@ const WALL_TRANSPARENT_INDEX = 1;
 // bank is safe.
 const SIDE_WALL_TRANSPARENT_INDICES = [0, WALL_TRANSPARENT_INDEX];
 
-// A niche-flagged side's own front-wall texture (see dungeon.ts's
-// frontWallFlipped) reserves a *second* colorkey index (0) on top of the
+// A niche-flagged side's own front-wall texture (see
+// VERTICALLY_FLIPPED_TEXTURES above for its orientation fix) reserves a
+// *second* colorkey index (0) on top of the
 // usual wall/decoration one (1) — verified against LES1A23A.PCX, where
 // index 0 is a separately-painted red "background" covering 27% of the
 // image, distinct from index 1's colorkey. A door's frame sequence needs

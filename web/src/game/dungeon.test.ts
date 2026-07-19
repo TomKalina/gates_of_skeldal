@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
+import { A_OPEN_CLOSE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
 import { behind, canStep, computeVisibleGrid, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
@@ -75,20 +75,6 @@ describe('computeViewCells', () => {
 
     const cells = computeViewCells(animatedMap, 0, 1);
     expect(cells[0]?.frontWallTexture).toBe(5 + 2);
-  });
-
-  it('flags a niche-bearing front wall for a vertical flip', () => {
-    // A side with oblouk's SD_HAS_NICHE bit set uses its "wall" texture slot
-    // for a floor-standing prop (verified against LESPRED.MAP's start
-    // sector: oblouk=0x10, prim texture LES1A23A.PCX — a table, stored
-    // flipped top-to-bottom relative to ordinary wall art).
-    const map = buildTestMap();
-    const nicheWall: MapSide = { prim: 5, sec: 0, oblouk: SD_HAS_NICHE, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_TRANSPARENT, primAnim: 0, secAnim: 0, action: 0 };
-    const nicheMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? nicheWall : s)) };
-
-    const cells = computeViewCells(nicheMap, 0, 1);
-    expect(cells[0]?.frontWallFlipped).toBe(true);
-    expect(cells[1]?.frontWallFlipped).toBe(false);
   });
 
   it('reports a door front side via its independent secondary texture slot', () => {

@@ -222,6 +222,76 @@ parity vs C build where applicable). Updated as issues close.
     `LESPRED.MAP` is). A real per-texture "second background index" solution
     (rather than a hardcoded 0) is future work if/when another map is
     wired up.
+  - **Correction (2026-07-19)**: the `SD_HAS_NICHE`-driven flip above turned
+    out to be a coincidentally-correct diagnosis of the wrong mechanism.
+    User report: "most wall texture on walls is still 180° rotated — doors,
+    the cave entrance, trees" (with a screenshot of a rock archway rendering
+    with the rock mass hanging down like a stalactite and a floor floating
+    above it). Deep-read `game/engine1.c`'s `show_cel`/`show_cel2` (the real
+    wall-texture blitters, confirmed active via `game/CMakeLists.txt` — the
+    dead `libs/engine1.c`/`*.asm` files were checked and ruled out) via a
+    dispatched research workflow: **the real engine never flips or mirrors
+    front-wall texture pixel data for the ordinary `q->prim`/`q->sec` case,
+    under any condition** — `rev` always resolves to the unmirrored branch
+    for main-bank textures; `SD_POSITION` ("plac") only ever perturbs a
+    vertical Y-anchor offset, never a mirror decision; the one real mirror
+    case in the whole engine is the two receding *side* walls being drawn
+    as screen-mirrored counterparts of each other (`LEFT_NUM` vs
+    `RIGHT_NUM`), unrelated to this bug. Separately, `SD_HAS_NICHE` sides
+    render through a completely different function (`draw_vyklenek` →
+    `draw_item2` → `enemy_draw`, `engine1.c:1374`) with no `rev`/mirror
+    parameter at all — meaning the previous "flip when niche-flagged"
+    hypothesis was never actually modeling real engine behavior, it just
+    happened to produce the right answer for `LES1A23A.PCX` by accident.
+    Conclusion: **the flip is a per-asset authoring quirk with no map-data
+    flag, PCX header field, or filename pattern that predicts it** — tried
+    and ruled out: `oblouk`/`SD_HAS_NICHE` (doesn't correlate — most
+    confirmed-needing-flip textures have no niche bit, while the
+    niche-flagged table needed it anyway), PCX header `hdpi`/`vdpi` fields
+    (found nonzero-matching-dimensions on both flip-needed and flip-not-
+    needed files, e.g. `PRECW02A.PCX` and `LES1A11A.PCX` share the identical
+    header pattern yet only one needs a flip), filename prefix (`LES1W03A`
+    needs it, `LES1W01A`/`02A` don't). Resolved by decoding and visually
+    judging every non-floor/ceiling texture LESPRED.MAP uses (main + left/
+    right banks, ~74 files) against physical plausibility (door hinges/
+    handles/thresholds at sensible heights, roof-over-wall not wall-over-
+    roof, canopy-over-roots, archway-curving-up not hanging-down like a
+    stalactite) — dispatched as a parallel visual-survey workflow, cross-
+    checked by hand for a few (the workflow's own judgment on `PRECW02A`
+    directly contradicted an earlier hasty read of mine; re-examining both
+    orientations side by side, the workflow was right — a reminder that a
+    "the flip looks obviously correct" read can itself be a snap-judgment
+    error when the composition is ambiguous, same as this file's own
+    earlier "trees are upside down" misdiagnosis turning out to be a
+    colorkey bug). 27 texture names confirmed needing the flip this way
+    (`main.ts`'s `VERTICALLY_FLIPPED_TEXTURES`) — a mix of thatched-roof
+    hut doors (`LES1A03-06*`), the table/candle animation frames
+    (`LES1A21-24A`, superseding the niche-flag mechanism), a rock archway
+    (`LES1W03A`), thatch-roofed wall/window pieces (`LES1W15*`, `LES1W16*`,
+    `LES1W18*`, `LES1W19*`), and a gate archway (`PRECW07A/B` — the
+    screenshot's "cave entrance"; its sibling `PRECW02A`, a tree-canopy
+    scene, does *not* need it, confirming this really is per-file, not
+    per-prefix). The flip is now baked into the decoded `ImageData` once,
+    at texture-load time, keyed purely by filename
+    (`codecs/pcx.ts`'s `flipImageDataVertically`, called from `main.ts`'s
+    `loadTextureSet`) — applying uniformly across all three texture banks
+    (main/left/right) rather than being a per-side, per-cell runtime
+    decision. `dungeon.ts`'s `ViewCell.frontWallFlipped`/`hasNiche()` and
+    `dungeon-view.ts`'s `toDrawableFlipped` are deleted entirely; `main.ts`
+    no longer needs to inspect `oblouk` to decide orientation (still reads
+    it for the unrelated double-colorkey niche/door detection). Verified
+    live: the start-room table still renders correctly (same flip
+    mechanism, now name-keyed instead of niche-flag-keyed), and the reached/
+    walkable area shows no regressions; the specific reported "cave
+    entrance" (`PRECW07A/B`) sits in a backdrop-only sector not reachable by
+    normal movement in this map (confirmed via BFS over `canStep`), so it
+    couldn't be re-screenshotted directly — verified instead by confirming
+    the exact same code path (name lookup → `flipImageDataVertically`) that
+    demonstrably fixes the reachable, re-screenshotted cases also covers it.
+    Known-incomplete for other maps (no signal exists to auto-detect new
+    per-map flip lists — this is now the *second* hardcoded per-`LESPRED.MAP`
+    exception list alongside the double-colorkey index one above; both will
+    need revisiting once D3 makes other maps reachable).
   - **Real dungeon UI chrome**, added against a reference screenshot showing
     the actual top/bottom bars: the top status bar is one real asset,
     `TOPBAR.PCX` (640x16 — button/icon x-boundaries measured directly off it
