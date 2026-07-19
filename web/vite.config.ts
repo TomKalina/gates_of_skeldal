@@ -8,9 +8,11 @@ import { defineConfig } from 'vitest/config';
 // being bundled or committed. `apply: 'serve'` means this plugin never runs
 // for `vite build` — it has no effect on the production bundle.
 const ALLOWED_DEV_ASSETS = new Set(['SKELDAL.DDL']);
-// .MAP files live loose under data/maps/ (skeldal.ini's separate `maps` path),
-// not inside SKELDAL.DDL — allowlisted individually as new maps are needed.
-const ALLOWED_DEV_MAPS = new Set(['LESPRED.MAP']);
+// .MAP files (and ITEMS.DAT, the same block-container format, same folder —
+// see formats/items-file.ts) live loose under data/maps/ (skeldal.ini's
+// separate `maps` path), not inside SKELDAL.DDL — allowlisted individually
+// as new maps are needed.
+const ALLOWED_DEV_MAPS = new Set(['LESPRED.MAP', 'ITEMS.DAT']);
 
 function serveLocalGameData(): Plugin {
   return {

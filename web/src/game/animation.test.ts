@@ -23,6 +23,7 @@ function singleSideMap(side: MapSide): DungeonMap {
     archLeftTextures: [],
     archRightTextures: [],
     fadeColor: { r: 0, g: 0, b: 0 },
+    placedItems: new Map(),
   };
 }
 

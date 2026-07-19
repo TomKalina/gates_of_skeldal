@@ -9,6 +9,7 @@ import { MENU_ITEMS } from './gui/menu-nav';
 import type { HotspotMask } from './gui/hotspot-mask';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
+import { parseItemsFile } from './formats/items-file';
 import { decodePcx, flipImageDataHorizontally, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
@@ -289,7 +290,24 @@ function flipTextureSetHorizontally(textures: ReadonlyMap<number, ImageData>): R
   return flipped;
 }
 
-function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
+// ITEMS.DAT's item sprites are drawn exclusively through engine1.c's
+// enemy_draw (game/engine2.c), whose per-pixel blit treats raw palette
+// index 0 as unconditionally transparent — a fixed engine behavior for this
+// draw path, not a per-asset judgment call like WALL_TRANSPARENT_INDEX.
+const ITEM_TRANSPARENT_INDEX = 0;
+
+function loadItemTextures(archive: DDLArchive, itemAppearance: readonly (string | null)[]): ReadonlyMap<number, ImageData> {
+  const textures = new Map<number, ImageData>();
+  itemAppearance.forEach((name, i) => {
+    if (!name) return;
+    const raw = archive.extract(name);
+    if (!raw) return;
+    textures.set(i + 1, pcxToImageData(decodePcx(raw, { transparentIndex: ITEM_TRANSPARENT_INDEX })));
+  });
+  return textures;
+}
+
+function loadDungeonTextures(archive: DDLArchive, map: DungeonMap, itemAppearance: readonly (string | null)[]): DungeonTextureSet {
   const doubleKey = doubleColorkeyMainTextureIndices(map);
   return {
     main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, doubleKey),
@@ -303,6 +321,7 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextu
     // niche/door-only double-key convention.
     archLeft: loadTextureSet(archive, map.archLeftTextures, SIDE_WALL_TRANSPARENT_INDICES),
     archRight: flipTextureSetHorizontally(loadTextureSet(archive, map.archRightTextures, SIDE_WALL_TRANSPARENT_INDICES)),
+    item: loadItemTextures(archive, itemAppearance),
   };
 }
 
@@ -359,9 +378,11 @@ async function enterDungeon(
 ): Promise<boolean> {
   const mapBuffer = await tryAutoLoadMap(START_MAP);
   if (!mapBuffer) return false;
+  const itemsBuffer = await tryAutoLoadMap('ITEMS.DAT');
+  const itemAppearance = itemsBuffer ? parseItemsFile(itemsBuffer).itemAppearance : [];
 
   const map = parseMapFile(mapBuffer);
-  const textures = loadDungeonTextures(archive, map);
+  const textures = loadDungeonTextures(archive, map, itemAppearance);
   const { result } = runDungeonView(
     ctx,
     { map, sector: start?.sector ?? map.startSector, direction: start?.direction ?? (map.startDirection as Direction) },

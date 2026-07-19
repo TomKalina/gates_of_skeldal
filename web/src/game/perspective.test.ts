@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calcPoints, floorCeilBand, MIDDLE_X, MIDDLE_Y, VIEW3D_X, VIEW3D_Z, wallCellBounds } from './perspective';
+import { calcPoints, floorCeilBand, mapPos, MIDDLE_X, MIDDLE_Y, VIEW3D_X, VIEW3D_Z, wallCellBounds } from './perspective';
 
 describe('calcPoints', () => {
   const geometry = calcPoints();
@@ -115,5 +115,39 @@ describe('wallCellBounds', () => {
     const far = wallCellBounds(geometry, 4, 1);
     expect(near.xr - near.xl).toBeGreaterThan(far.xr - far.xl);
     expect(near.yBottom - near.yTop).toBeGreaterThan(far.yBottom - far.yTop);
+  });
+});
+
+describe('mapPos', () => {
+  const geometry = calcPoints();
+  const CTVR = 128;
+
+  it('centers x at MIDDLE_X and y at the floor row when posx is half of CTVR and posy/posz are 0', () => {
+    const pos = mapPos(geometry, 0, 0, CTVR / 2, 0, 0);
+    expect(pos.x).toBe(MIDDLE_X);
+    expect(pos.y).toBe(305 + MIDDLE_Y);
+    // last_scale at posy=0 is just p1: floorY(0)-ceilY(0) = 305-(-150).
+    expect(pos.scale).toBe(305 - -150);
+  });
+
+  it('lifts y upward (decreasing) as posz increases, scaled by the local wall height', () => {
+    const onFloor = mapPos(geometry, 0, 0, CTVR / 2, 0, 0);
+    const lifted = mapPos(geometry, 0, 0, CTVR / 2, 0, 64);
+    expect(lifted.y).toBeLessThan(onFloor.y);
+  });
+
+  it('sweeps x from the cell\'s left edge to its right edge as posx goes 0 -> CTVR (matches wallCellBounds at posy=0)', () => {
+    const bounds = wallCellBounds(geometry, 0, 1);
+    expect(mapPos(geometry, 1, 0, 0, 0, 0).x).toBe(bounds.xl);
+    expect(mapPos(geometry, 1, 0, CTVR, 0, 0).x).toBe(bounds.xr);
+  });
+
+  it('mirrors a left lateral cell against the equivalent right one (posx mirrored to CTVR-posx)', () => {
+    const posx = 30;
+    const left = mapPos(geometry, -1, 2, CTVR - posx, 40, 0);
+    const right = mapPos(geometry, 1, 2, posx, 40, 0);
+    expect(left.x).toBe(2 * MIDDLE_X - right.x);
+    expect(left.y).toBe(right.y);
+    expect(left.scale).toBe(right.scale);
   });
 });

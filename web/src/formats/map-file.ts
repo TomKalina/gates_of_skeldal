@@ -21,6 +21,7 @@ const BLOCK_STR_ARC = 0x8008;
 const BLOCK_MAP_INFO = 0x8009;
 const BLOCK_MAP_GLOB = 0x800a;
 const BLOCK_STR_ARC2 = 0x800b;
+const BLOCK_MAP_ITEM = 0x800c;
 const BLOCK_MAP_END = 0x8000;
 
 const TSTENA_SIZE = 16;
@@ -176,6 +177,10 @@ export interface DungeonMap {
   // just gated by different flags/indices at render time.
   archLeftTextures: readonly string[];
   archRightTextures: readonly string[];
+  // A_MAPITEM: floor item piles, keyed by sector*4+direction (same indexing
+  // as `sides`) — see placedItemsAt(), dungeon.ts's ViewCell.floorItems, and
+  // game/builder.c's draw_placed_items_normal.
+  placedItems: ReadonlyMap<number, readonly number[]>;
 }
 
 function readCString(bytes: Uint8Array, start: number, end: number): string {
@@ -230,6 +235,30 @@ function parseSectorShading(bytes: Uint8Array, view: DataView): boolean[] {
     shaded.push((flags & MC_SHADING) !== 0);
   }
   return shaded;
+}
+
+// A_MAPITEM (game/inv.c: load_item_map): repeating {int32 combinedIdx
+// (=sector*4+direction); int16 itemNumber...; int16 0 terminator}. Item
+// numbers are signed, 1-based into ITEMS.DAT's item list; negative entries
+// are inert placeholders that draw_placed_items_normal's `if (*c>0)` never
+// draws, but they still occupy a pile slot — kept as-is (not filtered) so
+// each real item keeps the slot index its on-floor jitter offset depends on.
+function parsePlacedItems(bytes: Uint8Array, view: DataView): Map<number, number[]> {
+  const piles = new Map<number, number[]>();
+  let pos = 0;
+  while (pos < bytes.length) {
+    const combined = view.getInt32(pos, true);
+    pos += 4;
+    const items: number[] = [];
+    for (;;) {
+      const value = view.getInt16(pos, true);
+      pos += 2;
+      if (value === 0) break;
+      items.push(value);
+    }
+    piles.set(combined, items);
+  }
+  return piles;
 }
 
 function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
@@ -291,6 +320,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
   let floorTextures: string[] = [];
   let archLeftTextures: string[] = [];
   let archRightTextures: string[] = [];
+  let placedItems = new Map<number, number[]>();
 
   for (;;) {
     if (pos + TAG_LENGTH + 12 > bytes.length) break;
@@ -345,6 +375,9 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
       case BLOCK_STR_ARC2:
         archRightTextures = readNulSeparatedList(payload);
         break;
+      case BLOCK_MAP_ITEM:
+        placedItems = parsePlacedItems(payload, payloadView);
+        break;
       default:
         break;
     }
@@ -373,9 +406,14 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
     floorTextures,
     archLeftTextures,
     archRightTextures,
+    placedItems,
   };
 }
 
 export function sideAt(map: DungeonMap, sector: number, direction: number): MapSide | undefined {
   return map.sides[sector * 4 + direction];
+}
+
+export function placedItemsAt(map: DungeonMap, sector: number, direction: number): readonly number[] {
+  return map.placedItems.get(sector * 4 + direction) ?? [];
 }

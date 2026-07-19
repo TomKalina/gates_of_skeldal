@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, parseMapFile, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, parseMapFile, placedItemsAt, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -51,6 +51,21 @@ function sectorPayload(floor: number, ceil: number, stepNext: [number, number, n
   view.setUint16(10, stepNext[2], true);
   view.setUint16(12, stepNext[3], true);
   return payload;
+}
+
+// A_MAPITEM: repeating {int32 combinedIdx=sector*4+direction; int16
+// itemNumber...; int16 0 terminator}.
+function placedItemsPayload(entries: { sector: number; direction: number; items: number[] }[]): number[] {
+  const parts: number[] = [];
+  for (const { sector, direction, items } of entries) {
+    const buf = new Uint8Array(4 + (items.length + 1) * 2);
+    const view = new DataView(buf.buffer);
+    view.setInt32(0, sector * 4 + direction, true);
+    items.forEach((v, i) => view.setInt16(4 + i * 2, v, true));
+    view.setInt16(4 + items.length * 2, 0, true);
+    parts.push(...buf);
+  }
+  return parts;
 }
 
 function sidePayload(prim: number, flags: number, oblouk = 0, action = 0): Uint8Array {
@@ -139,6 +154,18 @@ describe('parseMapFile', () => {
     expect(map.sectors[1]?.shaded).toBe(true);
   });
 
+  it('parses A_MAPITEM (0x800c) as floor item piles keyed by sector*4+direction, preserving negative placeholder slots', () => {
+    const buffer = new Uint8Array([
+      ...block(0x800a, mapGlobalPayload(0, 0, 'Test Map')),
+      ...block(0x8002, sectorPayload(1, 1, [0, 0, 0, 0])),
+      ...block(0x800c, new Uint8Array(placedItemsPayload([{ sector: 0, direction: 0, items: [52, -40, -22] }]))),
+      ...block(0x8000, new Uint8Array(0)),
+    ]).buffer;
+    const map = parseMapFile(buffer);
+    expect(placedItemsAt(map, 0, 0)).toEqual([52, -40, -22]);
+    expect(placedItemsAt(map, 0, 1)).toEqual([]);
+  });
+
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
     expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
@@ -208,6 +235,7 @@ describe('toggleDoor', () => {
       archLeftTextures: [],
       archRightTextures: [],
     fadeColor: { r: 0, g: 0, b: 0 },
+    placedItems: new Map(),
     };
   }
 
@@ -266,6 +294,7 @@ describe('toggleDoor', () => {
       archLeftTextures: [],
       archRightTextures: [],
     fadeColor: { r: 0, g: 0, b: 0 },
+    placedItems: new Map(),
     };
 
     toggleDoor(map, 0, 1);

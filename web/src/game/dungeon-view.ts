@@ -1,11 +1,11 @@
-import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type ViewCell } from './dungeon';
+import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import { toggleDoor } from '../formats/map-file';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
-import { calcPoints, floorCeilBand, wallCellBounds, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
+import { calcPoints, floorCeilBand, mapPos, wallCellBounds, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
@@ -18,6 +18,10 @@ export interface DungeonTextureSet {
   // (main.ts) to match show_cel2's rev==2 mirrored-write behavior.
   archLeft: ReadonlyMap<number, ImageData>;
   archRight: ReadonlyMap<number, ImageData>;
+  // A_MAPITEM floor items (game/builder.c: draw_placed_items_normal), keyed
+  // by the raw 1-based item number (see dungeon.ts's FloorItem) — resolved
+  // from ITEMS.DAT's TITEM.vzhled via items-file.ts.
+  item: ReadonlyMap<number, ImageData>;
 }
 
 // The real dungeon screen's chrome (TOPBAR.PCX, SIPKY.PCX) — all optional
@@ -394,6 +398,44 @@ export function runDungeonView(
     applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
   }
 
+  // engine1.c: `static int items_indextab[][2]={{0,0},{-1,3},{1,7},{-1,7},
+  // {1,10},{-1,10},{0,10},{-2,15}};` — a small per-slot pixel jitter so
+  // items sharing a floor corner (jitterIndex 0..7, wrapping via `&7`)
+  // don't draw exactly on top of each other.
+  const ITEMS_INDEX_TAB: readonly (readonly [number, number])[] = [
+    [0, 0], [-1, 3], [1, 7], [-1, 7], [1, 10], [-1, 10], [0, 10], [-2, 15],
+  ];
+
+  // engine1.c's draw_item(): anchors a floor item's sprite at a sub-cell
+  // point (via mapPos) and draws it upward from there, scaled by mapPos's
+  // `scale`/320 — the same ratio enemy_draw's xtable/ytable prep uses for
+  // both dimensions uniformly (verified in game/engine2.c). Manual clipl/
+  // clipr clipping in the source exists only because the DOS blitter had no
+  // native clipping — Canvas2D's drawImage already clips off-canvas draws,
+  // so it isn't replicated here (same "port the visible result" convention
+  // as the rest of this renderer).
+  function drawFloorItem(cell: ViewCell, item: FloorItem): void {
+    const image = textures.item.get(item.itemNumber);
+    if (!image) return;
+    const [randx, randy] = ITEMS_INDEX_TAB[7 - (item.jitterIndex & 7)]!;
+    const pos = mapPos(viewportGeometry, cell.lateral, cell.depth, 42 * item.posx + 42 + randx, 72 * item.posy + randy, 0);
+    const rawWidth = (image.width * pos.scale) / 320;
+    const rawHeight = (image.height * pos.scale) / 320;
+    const rawX = pos.x - rawWidth / 2;
+
+    const x = VIEWPORT.x + rawX * perspectiveScaleX;
+    const yBottom = VIEWPORT.y + pos.y * perspectiveScaleY;
+    const width = rawWidth * perspectiveScaleX;
+    const height = rawHeight * perspectiveScaleY;
+
+    ctx.drawImage(toDrawable(image), x, yBottom - height, width, height);
+    applyDepthShade(cell, x, yBottom - height, width, height);
+  }
+
+  function drawFloorItems(cell: ViewCell): void {
+    for (const item of cell.floorItems) drawFloorItem(cell, item);
+  }
+
   function drawTopBar(): void {
     if (chrome.topbar) ctx.putImageData(chrome.topbar, 0, 0);
     else {
@@ -518,6 +560,9 @@ export function runDungeonView(
     for (const cell of byDepthDescending) {
       drawSideWalls(cell);
       drawFrontWall(cell);
+    }
+    for (const cell of byDepthDescending) {
+      drawFloorItems(cell);
     }
 
     drawTopBar();

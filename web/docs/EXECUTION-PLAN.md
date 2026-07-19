@@ -334,10 +334,9 @@ produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
 
 ## Phase D — World content (issues #6, #13, #14 parts)
 
-- **D1. Placed items**: `A_MAPITEM`/`A_MAPVYK` rendering
-  (`draw_placed_items_normal`, `draw_vyklenek`, `calc_item_shiftup` in
-  `builder.c`), `ITEMS.DAT` TITEM parse (222-byte records, `vzhled` at
-  offset 140 — already researched, see port-graph.md).
+- **D1. Placed items** — **done for `A_MAPITEM`/`draw_placed_items_normal`**
+  (2026-07-19); `A_MAPVYK`/`draw_vyklenek` (niche items) still pending, see
+  port-graph.md's Phase D1 entry for the exact split and why.
 - **D2. Inventory screen** (`game/inv.c`) on the C-phase toolkit.
 - **D3. Map switching**: `A_CHANGE_MAP`-family actions + `GLOBMAP.DAT`
   (`game/globmap.c`) — walking between all 22 maps.

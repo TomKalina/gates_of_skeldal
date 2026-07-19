@@ -188,3 +188,61 @@ export function wallCellBounds(geometry: ViewportGeometry, depth: number, latera
     yBottom: geometry[0]![0]![depth]!.y + MIDDLE_Y,
   };
 }
+
+// engine1.c: `#define CTVR 128` — the fractional unit map_pos's posx/posy/
+// posz args are expressed in (0..CTVR spans one cell).
+const CTVR = 128;
+
+export interface ItemPosition {
+  x: number;
+  y: number;
+  // `last_scale` in the source: a pixel-height-of-wall-at-this-position
+  // value, used directly as a sprite zoom numerator over a 320 reference
+  // width (see dungeon-view.ts's drawFloorItem).
+  scale: number;
+}
+
+// C's `/` truncates toward zero for ints — Math.trunc matches that (unlike
+// Math.floor, which rounds differently for negative operands); every
+// division in map_pos is real, load-bearing integer truncation, not a
+// convenience.
+function idiv(a: number, b: number): number {
+  return Math.trunc(a / b);
+}
+
+// engine1.c's map_pos(): places an arbitrary sub-cell point — a fraction
+// (posx,posy,posz, each out of CTVR=128) of the cell at (lateral,depth) —
+// into screen space, by bilinearly interpolating the *same* viewport_
+// geometry fan wallCellBounds/floorCeilBand key off. Floor/ceiling and
+// walls each pick a fixed corner of that geometry; map_pos additionally
+// blends *within* a cell in both x (posx) and depth (posy), which is how
+// the real engine places item/sprite floor anchors anywhere on a tile's
+// floor instead of only at its corners. `posz` lifts the point above the
+// floor by a fraction of the local wall height (e.g. tabletop items) — the
+// only caller ported so far (draw_item, for ordinary floor items) always
+// passes 0, but the parameter is kept to stay a faithful 1:1 port.
+export function mapPos(geometry: ViewportGeometry, lateral: number, depth: number, posx: number, posy: number, posz: number): ItemPosition {
+  let negate = false;
+  if (lateral < 0) {
+    negate = true;
+    posx = CTVR - posx;
+    lateral = -lateral;
+  }
+
+  const floorY = (d: number) => geometry[0]![0]![d]!.y;
+  const ceilY = (d: number) => geometry[0]![1]![d]!.y;
+  const p1 = floorY(depth) - ceilY(depth);
+  const p2 = floorY(depth + 1) - ceilY(depth + 1);
+  const scale = idiv(posy * (p2 - p1), CTVR) + p1;
+  const y = floorY(depth) - idiv(posy * (floorY(depth) - floorY(depth + 1)), CTVR) - idiv(scale * posz, CTVR);
+
+  const edgeX = (k: number, d: number) => geometry[k]![0]![d]!.x;
+  const xr = edgeX(lateral, depth) - idiv(posy * (edgeX(lateral, depth) - edgeX(lateral, depth + 1)), CTVR);
+  const xl = lateral
+    ? edgeX(lateral - 1, depth) - idiv(posy * (edgeX(lateral - 1, depth) - edgeX(lateral - 1, depth + 1)), CTVR)
+    : -xr;
+  let x = xl + idiv((xr - xl) * posx, CTVR);
+  if (negate) x = -x;
+
+  return { x: x + MIDDLE_X, y: y + MIDDLE_Y, scale };
+}

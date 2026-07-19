@@ -1,4 +1,4 @@
-import { A_OPEN_CLOSE, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
+import { A_OPEN_CLOSE, placedItemsAt, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -75,6 +75,49 @@ export interface ViewCell {
   // show both halves, one, or neither, regardless of frontWallTexture.
   frontArchLeftTexture: number | null;
   frontArchRightTexture: number | null;
+  // A_MAPITEM floor item piles for this cell's sector (builder.c's
+  // draw_placed_items_normal) — see FloorItem and computeVisibleGrid's own
+  // comment for the (i+facing)&3 side rotation and possx/possy placement.
+  floorItems: readonly FloorItem[];
+}
+
+// draw_placed_items_normal's one on-floor item to draw: `itemNumber` is the
+// raw (1-based, positive) A_MAPITEM entry; `posx`/`posy` select which of
+// the tile's 4 floor corners (possx/possy in the source); `jitterIndex` is
+// that item's slot position within its pile (including any inert negative
+// slots before it — see FLOOR_ITEM_POSX/Y's own comment), which selects a
+// small per-slot pixel offset so items sharing a corner don't overlap
+// exactly (see dungeon-view.ts's ITEMS_INDEX_TAB).
+export interface FloorItem {
+  itemNumber: number;
+  posx: 0 | 1;
+  posy: 0 | 1;
+  jitterIndex: number;
+}
+
+// builder.c: `char possx[]={0,1,1,0}; possy[]={1,1,0,0};` — the 4 floor-tile
+// corners a pile's items are placed at, indexed by `i` (this cell's local
+// side slot, 0..3), not by compass direction.
+const FLOOR_ITEM_POSX = [0, 1, 1, 0] as const;
+const FLOOR_ITEM_POSY = [1, 1, 0, 0] as const;
+
+function floorItemsForSector(map: DungeonMap, sector: number, depth: number, facing: Direction): FloorItem[] {
+  // draw_placed_items_normal: `cnt=(cely==0)?2:4` — your own cell only
+  // shows its front and right piles; farther cells show all 4 (see the
+  // function's own real-source comment for why this asymmetry is kept
+  // exactly, not "fixed"). `side` there is the viewing direction into this
+  // sector, which — per this port's collapsed grid (see computeVisibleGrid's
+  // header comment) — is always the constant `facing`, never re-derived.
+  const sideCount = depth === 0 ? 2 : 4;
+  const items: FloorItem[] = [];
+  for (let i = 0; i < sideCount; i++) {
+    const side = ((i + facing) & 3) as Direction;
+    const pile = placedItemsAt(map, sector, side);
+    pile.forEach((itemNumber, jitterIndex) => {
+      if (itemNumber > 0) items.push({ itemNumber, posx: FLOOR_ITEM_POSX[i]!, posy: FLOOR_ITEM_POSY[i]!, jitterIndex });
+    });
+  }
+  return items;
 }
 
 // VIEW3D_Z/VIEW3D_X in engine1.h.
@@ -174,6 +217,7 @@ export function computeVisibleGrid(map: DungeonMap, startSector: number, facing:
       frontIsDoor: frontSide !== undefined && frontSide.action === A_OPEN_CLOSE,
       frontArchLeftTexture: frontSide && frontSide.flags & SD_LEFT_ARC ? archTextureIndex(frontSide) : null,
       frontArchRightTexture: frontSide && frontSide.flags & SD_RIGHT_ARC ? archTextureIndex(frontSide) : null,
+      floorItems: floorItemsForSector(map, sector, depth, facing),
     });
 
     if (isTransparent(frontSide)) {

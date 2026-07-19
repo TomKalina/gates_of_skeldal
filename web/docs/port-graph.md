@@ -727,6 +727,111 @@ parity vs C build where applicable). Updated as issues close.
     discarded back to select mode) → re-rolled → Přijmout (roll then
     accept) → Start hry, reaching the dungeon view with the created
     character in the roster; 0 console errors throughout.
+  - **Phase D1 — placed floor items** (`A_MAPITEM`/`draw_placed_items_
+    normal`, 2026-07-19). First Phase D work; done as part of this port's
+    standing "rewrite the engine 1:1" directive rather than for immediate
+    visible payoff — LESPRED.MAP (the only map this port loads) turns out
+    to have exactly one `A_MAPITEM` group (sector 8, side 0, 7 slots) and
+    only one of those 7 entries is a real (positive) item number; the rest
+    are negative placeholder slots `draw_placed_items_normal`'s `if (*c>0)`
+    never draws. Confirmed by parsing every block of the real
+    `LESPRED.MAP`/`ITEMS.DAT` directly rather than assuming.
+    - `ITEMS.DAT` (game/inv.c: `load_items`) is the *same* tag+type+size+
+      ignored+payload block container as `.MAP` (confirmed: both call the
+      real `realgame.c:load_section`, not the dead `transav.c` copy), just
+      with its own tiny section-code namespace (1..5 = graphics facing
+      banks, `0x8001`=item list, `0x8002`=sound names, `0x8000`=end) instead
+      of `.MAP`'s `A_*` 0x8000-range constants. `TITEM` is 222 bytes;
+      `vzhled` (the only field floor rendering needs) is at offset 140 —
+      confirmed by compiling the real struct with `-funsigned-char` and
+      reading `offsetof()`, since the source's own inline byte-offset
+      comments (`//140 specialni udalost` etc.) have drifted from the
+      actual compiled layout by a few bytes in places. `vzhled` is a
+      1-based index into section 1's filename list ("face 0" — the only
+      face `draw_placed_items_normal`/`draw_vyklenek` ever use; sections
+      2-5 turned out to be other facings, spell-effect frames (`FIREBAL*`),
+      and weapon-attack `.mgf` animations — combat/inventory-UI data out of
+      scope here). Ported to `src/formats/items-file.ts`'s `parseItemsFile`
+      → `ItemsFile.itemAppearance` (itemNumber-1 → texture filename).
+    - `A_MAPITEM` (`0x800c`, game/inv.c: `load_item_map`): repeating
+      `{int32 combinedIdx=sector*4+direction; int16 itemNumber...; int16 0
+      terminator}` — same `sector*4+direction` indexing `map-file.ts`'s
+      `sides` already uses. Item numbers can be negative (inert placeholder
+      slots, see above) — kept as-is rather than filtered, since a real
+      item's on-floor jitter offset depends on its slot position *including*
+      preceding negative slots (`draw_placed_items_normal`'s `k` index
+      increments for every slot, drawn or not). Ported to `map-file.ts`'s
+      `parsePlacedItems`/`DungeonMap.placedItems`/`placedItemsAt()`.
+    - Rendering (`game/builder.c`'s `draw_placed_items_normal`, called
+      *after* the wall/floor draw for the ordinary sector case): for a
+      cell at depth 0 (the viewer's own sector) only 2 of the sector's 4
+      side-piles are drawn (front + right, `cnt=2`); farther cells draw
+      all 4 (`cnt=4`) — a real, kept-as-is asymmetry from the source, not
+      a bug. Which compass side each of the `cnt` slots maps to is
+      `(i+facing)&3` — trivial in this port because `computeVisibleGrid`
+      already uses one constant `facing` for the whole visible grid (see
+      its own header comment), unlike the original's per-step `viewdir`
+      recursion. Ported to `dungeon.ts`'s `floorItemsForSector`/
+      `ViewCell.floorItems`/`FloorItem`.
+    - Positioning (`engine1.c`'s `map_pos`, called by `draw_item`): places
+      an arbitrary sub-cell point — `posx`/`posy`/`posz`, each a fraction of
+      `CTVR=128` — by bilinearly interpolating the *same*
+      `viewport_geometry` fan `wallCellBounds`/`floorCeilBand` already key
+      off, blending *within* a cell in both lateral (`posx`) and depth
+      (`posy`) instead of only picking a fixed corner. `posz` lifts the
+      point above the floor by a fraction of the local wall height (kept
+      as a parameter for fidelity even though the only caller ported so
+      far, `draw_item`, always passes 0). Ported 1:1 to `perspective.ts`'s
+      `mapPos`, using C's truncating-toward-zero `/` throughout (`idiv`,
+      matching `Math.trunc` not `Math.floor` — same rule `calcPoints`
+      already established). Verified against `wallCellBounds` itself:
+      `mapPos` at `posy=0` (no depth blend) exactly reproduces
+      `wallCellBounds`'s `xl`/`xr` as `posx` sweeps 0→`CTVR`, and mirrors
+      a negative lateral cell against its positive counterpart exactly
+      the same way `wallCellBounds`'s own mirror test does.
+    - Drawing (`engine1.c`'s `draw_item` → `engine2.c`'s `enemy_draw`):
+      `enemy_draw`'s `xtable`/`ytable` prep scales *both* dimensions by the
+      identical `scale/320` ratio (`scale` = `mapPos`'s `last_scale`) —
+      confirmed by reading both prep loops side by side, not assumed from
+      naming. The sprite's anchor `y` is its *bottom* row (screen pointer
+      walks upward, `screen -= scr_linelen2`, as the source scanline
+      iterates from the image's last row toward its first) — replicated as
+      `drawImage` at `(x, yBottom - height)`. Manual `clipl`/`clipr`
+      fractional clipping in the source exists only because the DOS
+      blitter had no native clipping — not replicated; Canvas2D's
+      `drawImage` already clips off-canvas draws (same "port the visible
+      result" convention used throughout this renderer). One depth-shade
+      overlay per item (`applyDepthShade`, reused unchanged) replaces
+      `enemy_draw`'s per-depth shaded-palette selection (`palette=picinfo+
+      shade/2`), consistent with how wall/door shading is already ported.
+      `items_indextab`'s per-slot pixel jitter (`ITEMS_INDEX_TAB`) is
+      copied verbatim.
+    - **Known, deliberate gap**: raw palette index 1 is special-cased in
+      the real `enemy_draw` as "blend 50% darker with whatever's already on
+      screen" (`(screen[xpos]&0x7BDE)>>1`) — apparently a soft drop-shadow
+      trick, distinct from index 0's full transparency. Not replicated:
+      doing so faithfully in Canvas2D would need a `getImageData` read of
+      the destination before every item draw, for a minor embellishment
+      that may not even be used by ordinary (non-enemy) item sprites. If a
+      real asset turns out to rely on it, index 1 currently just reads as
+      an ordinary opaque color from its own palette instead of a shadow
+      blend.
+    - **Deferred**: `A_MAPVYK`/`draw_vyklenek`/`calc_item_shiftup` (niche
+      items) — LESPRED.MAP has only 2 `TVYKLENEK` records, and
+      `draw_item2` (the niche draw path) positions via a *different*
+      mechanism (`showtabs.x_table[0][cely].max_x`/`y_table[cely+1].
+      vert_size`, the DOS-era cached per-depth table this port's geometry
+      functions deliberately replaced with direct analytic formulas) that
+      hasn't been derived/ported yet. Parsing `A_MAPVYK` without a
+      consumer would be dead code, so it's untouched for now rather than
+      half-added.
+    - Verified live (Playwright against the dev server + real
+      `SKELDAL.DDL`/`LESPRED.MAP`/`ITEMS.DAT`): BFS-computed the real
+      turn/move sequence from the map's actual start sector (18) to
+      sector 8 (right, forward, forward), confirmed the item (`ITEMS.DAT`
+      item 52, "Bandalír") renders floor-anchored at the predicted
+      position/scale with depth shading applied, and confirmed the start
+      room (table/candle scene) shows no regression; 0 console errors.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -737,7 +842,7 @@ parity vs C build where applicable). Updated as issues close.
 | `souboje.c` | turn-based combat | `src/game/combat.ts` | pending |
 | `enemy.c` | mob AI, pathing, sprite rendering | `src/game/mobs.ts` | pending |
 | `kouzla.c` | spell system | `src/game/spells.ts` | pending |
-| `inv.c` | items, inventory, stats, shops | `src/game/items.ts` | pending |
+| `inv.c` | items, inventory, stats, shops | `src/game/items.ts` | pending (floor-item rendering split out already — see `draw_placed_items_normal`/Phase D1 note below; inventory UI/equip/shops still pending) |
 | `dialogy.c` | dialog bytecode interpreter + UI | `src/game/dialogs.ts` | pending |
 | `gamesave.c` | save/load archive | `src/game/savegame.ts` | pending |
 | `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending |
