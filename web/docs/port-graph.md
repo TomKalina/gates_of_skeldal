@@ -514,11 +514,49 @@ parity vs C build where applicable). Updated as issues close.
     Also NOT ported: `check_autofade`'s distance-fog fade (baked into
     floor/ceiling textures on first use in the real engine) — noted as a
     B3-adjacent follow-up.
-    Also NOT changed: wall geometry (`rectAtDepthLateral`/`DEPTH_SCALE`)
-    still uses the old closed-form approximation — B2's explicit scope,
-    not B1's. The two systems may not align to the exact pixel at cell
-    boundaries until B2 lands; not visually jarring in current
-    verification, flagged in EXECUTION-PLAN.md to re-check later.
+    Also NOT changed at the time: wall geometry (`rectAtDepthLateral`/
+    `DEPTH_SCALE`) still used the old closed-form approximation — B2's
+    scope, done next (see below).
+  - **Phase B2 — real wall geometry** (`perspective.ts`'s `wallCellBounds`,
+    2026-07-19). Ported `create_tables`' `x_table`/`z_table` loops
+    (`game/engine1.c`, quoted in full during the same investigation that
+    settled the "does the engine ever mirror texture data" question — see
+    the wall-mirror correction above): a lateral cell's screen-space left/
+    right edges are `viewport_geometry[j][0][depth].x` evaluated *directly
+    at the cell's own depth*, never reprojected from another depth — this
+    is a genuinely different formula from floor/ceiling's `floorCeilBand`
+    (which reprojects the undecayed depth-0 fan by a y-ratio), confirmed by
+    reading both loops side by side in the source, not assumed. `dungeon-
+    view.ts`'s `rectAtDepthLateral` (used by front walls, side-wall
+    trapezoid corners, and the door hit-test rect) now wraps
+    `wallCellBounds` instead of `DEPTH_SCALE ** depth`, keeping every
+    existing call site's shape unchanged. Y bounds are provably identical
+    to `floorCeilBand`'s (`geometry[0][1][depth].y + MIDDLE_Y` appears
+    verbatim in both), so walls and floor/ceiling now meet at the same
+    pixel by construction instead of two independently-tuned
+    approximations happening to look close. 5 new unit tests (hand-
+    computed against the same decay sequence `calcPoints`'s own tests use).
+    Verified live: the start room's proportions now visibly track
+    `docs/reference/dungeon-table-scene.png` much more closely (the old
+    approximation rendered an oversized ceiling wedge; the reference shows
+    a thin ceiling strip with walls taking up most of the frame, and so
+    does the real-geometry result).
+    **Real regression caught during verification, fixed**: taller/
+    differently-proportioned wall rects exposed a black rectangle when
+    looking straight through the newly-opened forest door — `draw()`'s
+    base canvas fill was pure black, and `drawFloorCeilBase`'s single
+    fallback split (nearest center-column cell only, per B1's own
+    documented limitation) doesn't cover a *farther*, ceiling-less cell
+    newly visible through an opened passage. Mitigated by changing the
+    base fill to the same `#223` sky/ceiling-fallback color used
+    elsewhere — reads as sky instead of a rendering hole; the real fix
+    (a wall-visibility-independent floor/ceiling traversal) remains the
+    same deferred B1 follow-up.
+    **Not done**: `show_cel2`'s `plac` anchoring (`oblouk & SD_POSITION`)
+    and native-size blitting — textures still stretch to fill the cell via
+    Canvas2D `drawImage` rather than drawing at their real table-derived
+    size with cropping, so niche-prop proportions and off-center secondary
+    walls (`xsec`/`ysec`) are still approximate. Remains B2 scope.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 

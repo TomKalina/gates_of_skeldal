@@ -5,7 +5,7 @@ import type { Character } from './party';
 import { faceThumbnail } from './portraits';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
-import { calcPoints, floorCeilBand, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
+import { calcPoints, floorCeilBand, wallCellBounds, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
@@ -47,14 +47,17 @@ const BOTTOM_BAR_HEIGHT = 102;
 const VIEWPORT = { x: 0, y: TOPBAR_HEIGHT, width: 640, height: 480 - TOPBAR_HEIGHT - BOTTOM_BAR_HEIGHT };
 const BOTTOM_BAR = { x: 0, y: 480 - BOTTOM_BAR_HEIGHT, width: 640, height: BOTTOM_BAR_HEIGHT };
 
-// engine1.c's calc_points(): viewport_geometry[j][0/1][i].{x,y} recur as
-// `x -= x/FACTOR_3D` per depth i, for every lateral boundary j — i.e. every
-// lateral column shrinks by the exact same per-depth factor as the center
-// one, just starting from a different x offset. FACTOR_3D is 3.33 in
-// engine1.h, so the real per-depth shrink is `1 - 1/3.33`; that's the
-// actual constant (replacing an earlier eyeballed 0.62 that was never
-// checked against the source).
-const DEPTH_SCALE = 1 - 1 / 3.33;
+// Phase B2: real wall geometry (perspective.ts's calcPoints/wallCellBounds,
+// ported from engine1.c's calc_points + create_tables' x_table/z_table)
+// replacing the earlier DEPTH_SCALE closed-form approximation. Computed
+// once at module load — geometry is a pure constant, no map/state
+// dependency, same as floor/ceiling's viewportGeometry (Phase B1). Floor/
+// ceiling and walls now derive from the identical source table instead of
+// two independently-approximated shapes that merely looked close, so they
+// meet at the same pixel by construction.
+const viewportGeometry = calcPoints();
+const perspectiveScaleX = VIEWPORT.width / VIEW_SIZE_X;
+const perspectiveScaleY = VIEWPORT.height / VIEW_SIZE_Y;
 
 interface Rect {
   x: number;
@@ -63,21 +66,20 @@ interface Rect {
   height: number;
 }
 
-// calc_points() also starts each lateral boundary j at `START_X1 +
-// 2*START_X1*j` — i.e. exactly one full (unshrunk) viewport-width apart —
-// so lateral cells at a given depth tile edge-to-edge with the same shrink
-// factor as depth, never overlapping and never gapping. `lateral` here is
-// VIEW3D_X's signed cell index (0 = straight ahead), not a boundary index.
+// `lateral` is VIEW3D_X's signed cell index (0 = straight ahead), not a
+// boundary index. Kept as a Rect-returning function (same shape as the old
+// DEPTH_SCALE version) so every existing call site — side-wall trapezoid
+// corners, the front-wall rect, the door hit-test rect, the floor/ceiling
+// fallback split — carries over unchanged, now backed by real geometry.
 function rectAtDepthLateral(depth: number, lateral: number): Rect {
-  const scale = DEPTH_SCALE ** depth;
-  const width = VIEWPORT.width * scale;
-  const height = VIEWPORT.height * scale;
-  const centerX = VIEWPORT.x + VIEWPORT.width / 2 + lateral * VIEWPORT.width * scale;
+  const bounds = wallCellBounds(viewportGeometry, depth, lateral);
+  const x = VIEWPORT.x + bounds.xl * perspectiveScaleX;
+  const y = VIEWPORT.y + bounds.yTop * perspectiveScaleY;
   return {
-    x: centerX - width / 2,
-    y: VIEWPORT.y + (VIEWPORT.height - height) / 2,
-    width,
-    height,
+    x,
+    y,
+    width: (bounds.xr - bounds.xl) * perspectiveScaleX,
+    height: (bounds.yBottom - bounds.yTop) * perspectiveScaleY,
   };
 }
 
@@ -228,10 +230,6 @@ export function runDungeonView(
       ctx.fillRect(VIEWPORT.x, floorY, VIEWPORT.width, floorHeight);
     }
   }
-
-  const viewportGeometry = calcPoints();
-  const perspectiveScaleX = VIEWPORT.width / VIEW_SIZE_X;
-  const perspectiveScaleY = VIEWPORT.height / VIEW_SIZE_Y;
 
   function drawFloorCeilCell(cell: ViewCell, edge: Edge): void {
     // builder.c's draw_floor/draw_ceil macros only call draw_floor_ceil at
@@ -438,7 +436,14 @@ export function runDungeonView(
   }
 
   function draw(): void {
-    ctx.fillStyle = '#000';
+    // Sky-colored, not black: drawFloorCeilBase's single fallback split (see
+    // its own comment) is derived from the *nearest* center-column cell, so
+    // a farther no-ceiling cell newly exposed through an opened passage
+    // (e.g. looking through the open forest door into the ceiling-less
+    // sector beyond) isn't covered by it and falls through to this base
+    // fill — matches the same '#223' used for an ordinary missing-ceiling
+    // fallback instead of reading as a stark rendering hole.
+    ctx.fillStyle = '#223';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const grid = computeVisibleGrid(state.map, state.sector, state.direction);

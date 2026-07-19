@@ -168,15 +168,48 @@ golden-parity harness, which doesn't exist yet) — verified instead via
 Playwright screenshots against `docs/reference/*.png` by eye, consistent
 with every other visual verification this port has done so far.
 
-### B2. Exact wall geometry
-Replace the closed-form `DEPTH_SCALE`/`rectAtDepthLateral` with the real
-`calc_points` + `x_table`/`y_table`/`z_table` values (`engine1.c`), and
-implement `show_cel2`'s `plac` anchoring (`oblouk & SD_POSITION`) and
-native-size blitting (textures draw at table-derived sizes, not stretched
-to fill the cell). Fixes: niche-prop proportions, the red-sliver artifacts
-on tall outdoor textures, off-center secondary walls (`xsec`/`ysec`).
-**Done when**: golden-diff (B0) of the start room and the forest exit
-matches the C build within a small pixel tolerance.
+### B2. Exact wall geometry — **partially done** (2026-07-19)
+Replaced the closed-form `DEPTH_SCALE`/`rectAtDepthLateral` with the real
+`calc_points`-derived geometry (`perspective.ts`'s `wallCellBounds`,
+mirroring `create_tables`' `x_table`/`z_table` loops): a lateral cell's
+screen-space edges now come from `viewport_geometry[j][0][depth].x`
+evaluated *directly at the target depth* (matching `x_table`'s formula
+exactly), not reprojected from the depth-0 fan the way floor/ceiling's
+`floorCeilBand` works — confirmed these are genuinely different formulas
+in the source, not two ways of writing the same thing. Front walls, side
+walls, and the door hit-test rect all now derive from the same
+`wallCellBounds` calls that floor/ceiling's `floorCeilBand` also draws
+from (same `viewport_geometry` table), so they meet at the same pixel by
+construction — Y bounds are provably identical (`floorCeilBand`'s
+ceiling-edge row and `wallCellBounds`' `yTop` use the exact same
+`geometry[0][1][depth].y + MIDDLE_Y` expression). 5 new unit tests.
+Verified live: the start room's wall/ceiling proportions now visibly match
+`docs/reference/dungeon-table-scene.png` far more closely than the old
+approximation (walls take up much more of the frame, matching the
+reference's thin ceiling strip, instead of the old approximation's
+oversized ceiling wedge); forest and door-swing scenes re-verified with no
+regressions. One real regression caught and fixed during verification: with
+taller/differently-proportioned wall rects, a previously-hidden gap opened
+up — looking straight through the newly-opened forest door exposed a
+stark black rectangle where the far (ceiling-less) outdoor cell's "sky"
+should read, because `drawFloorCeilBase`'s single fallback split (see its
+own comment) is derived from the *nearest* center-column cell only, not
+this specific farther one. Not a new architectural bug, the same
+already-documented "single fallback layer can't represent per-cell
+differences along one column" gap from B1, just newly exposed by more
+accurate wall proportions. Mitigated (not fixed) by changing the canvas's
+base clear color from black to the same `#223` sky/ceiling-fallback color,
+so any future gap of this shape reads as sky rather than a rendering hole
+— the real fix (a wall-visibility-independent floor/ceiling traversal) is
+the same deferred B1 follow-up, still not attempted.
+**Not done**: `show_cel2`'s `plac` anchoring (`oblouk & SD_POSITION`,
+vertical placement within a cell) and native-size blitting (textures still
+stretch to fill the cell via Canvas2D `drawImage`, rather than drawing at
+their table-derived native size with cropping) — niche-prop proportions
+and off-center secondary walls (`xsec`/`ysec`) remain unfixed, still B2
+scope. **Done when** (bit-exact golden-diff against a C build) still not
+met — no B0 harness exists; verified instead via Playwright screenshots
+against `docs/reference/*.png` by eye, same as B1.
 
 ### B0 (parallel, high leverage). Golden-parity harness (issue #3)
 Patch the C build (`platform/sdl/`) with a debug key that dumps the
@@ -235,12 +268,10 @@ global deploy conventions.
 - Hardcoded second colorkey index 0 for niche/door/side-wall textures —
   works for LESPRED.MAP, known-wrong for SKRETI.MAP (index 175); revisit
   when D3 makes other maps reachable.
-- Wall geometry (`rectAtDepthLateral`/`DEPTH_SCALE`) still uses the old
-  closed-form approximation while floor/ceiling (B1, done) now uses the
-  real `calc_points`-derived geometry — the two won't align to the exact
-  pixel at cell boundaries until B2 replaces wall geometry with the same
-  real table. Not visually jarring in current verification, but worth
-  re-checking once B2 lands.
+- **Resolved** (2026-07-19): wall geometry now uses the same real
+  `calc_points`-derived table as floor/ceiling (`wallCellBounds`,
+  `perspective.ts`) instead of the old `DEPTH_SCALE` closed-form
+  approximation — the two provably align vertically by construction.
 - `computeVisibleGrid`'s transparency-gated traversal means floor/ceiling
   can't be drawn accurately beyond a solid wall (no cell exists there) —
   worked around with a full-viewport fallback layer underneath the

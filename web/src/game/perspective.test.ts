@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calcPoints, floorCeilBand, MIDDLE_Y, VIEW3D_X, VIEW3D_Z } from './perspective';
+import { calcPoints, floorCeilBand, MIDDLE_X, MIDDLE_Y, VIEW3D_X, VIEW3D_Z, wallCellBounds } from './perspective';
 
 describe('calcPoints', () => {
   const geometry = calcPoints();
@@ -65,7 +65,6 @@ describe('floorCeilBand', () => {
   it('a left lateral cell mirrors a right one across the center column (MIDDLE_X)', () => {
     const left = floorCeilBand(geometry, 1, -1, 0);
     const right = floorCeilBand(geometry, 1, 1, 0);
-    const MIDDLE_X = 320;
     expect(left.xlNear).toBeCloseTo(2 * MIDDLE_X - right.xrNear, 6);
     expect(left.xrNear).toBeCloseTo(2 * MIDDLE_X - right.xlNear, 6);
     expect(left.rowNear).toBe(right.rowNear);
@@ -76,5 +75,45 @@ describe('floorCeilBand', () => {
     const near = floorCeilBand(geometry, 0, 1, 0);
     const far = floorCeilBand(geometry, 4, 1, 0);
     expect(near.xrNear - near.xlNear).toBeGreaterThan(far.xrNear - far.xlNear);
+  });
+});
+
+describe('wallCellBounds', () => {
+  const geometry = calcPoints();
+
+  it('the center column at depth 0 spans the undecayed +-357 seed around MIDDLE_X', () => {
+    const bounds = wallCellBounds(geometry, 0, 0);
+    expect(bounds.xl).toBe(-357 + MIDDLE_X);
+    expect(bounds.xr).toBe(357 + MIDDLE_X);
+  });
+
+  it('uses the direct per-depth decay, not a depth-0 reprojection (unlike floorCeilBand)', () => {
+    // x1 decays 357 -> 249 -> 174 -> ... (same recurrence as calcPoints'
+    // own test); depth 2's bound must equal that decayed value directly,
+    // not 357 scaled by some y-ratio.
+    const bounds = wallCellBounds(geometry, 2, 0);
+    expect(bounds.xr).toBe(174 + MIDDLE_X);
+  });
+
+  it('yTop/yBottom come from the ceiling/floor edge y at that exact depth', () => {
+    const bounds = wallCellBounds(geometry, 1, 0);
+    expect(bounds.yTop).toBe(-104 + MIDDLE_Y);
+    expect(bounds.yBottom).toBe(213 + MIDDLE_Y);
+  });
+
+  it('a left lateral cell mirrors a right one across MIDDLE_X', () => {
+    const left = wallCellBounds(geometry, 2, -1);
+    const right = wallCellBounds(geometry, 2, 1);
+    expect(left.xl).toBeCloseTo(2 * MIDDLE_X - right.xr, 6);
+    expect(left.xr).toBeCloseTo(2 * MIDDLE_X - right.xl, 6);
+    expect(left.yTop).toBe(right.yTop);
+    expect(left.yBottom).toBe(right.yBottom);
+  });
+
+  it('cells narrow with depth as the geometry decays toward the horizon', () => {
+    const near = wallCellBounds(geometry, 0, 1);
+    const far = wallCellBounds(geometry, 4, 1);
+    expect(near.xr - near.xl).toBeGreaterThan(far.xr - far.xl);
+    expect(near.yBottom - near.yTop).toBeGreaterThan(far.yBottom - far.yTop);
   });
 });

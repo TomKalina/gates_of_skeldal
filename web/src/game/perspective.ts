@@ -29,12 +29,14 @@
 // texture once at native scale, clipped to a per-cell trapezoid, instead
 // of replicating the scanline-table/memcpy technique itself.
 //
-// Scope note (Phase B1 — see docs/EXECUTION-PLAN.md): only floor/ceiling
-// geometry is ported here. Wall geometry (`x_table`/`z_table`,
-// `show_cel2`'s `plac` anchoring) is Phase B2 and still uses the older
-// `DEPTH_SCALE` closed-form approximation in `dungeon-view.ts` — so floor/
-// wall edges may not align to the exact pixel until B2 replaces that too;
-// documented as a known seam in port-graph.md.
+// Phase B2 (see docs/EXECUTION-PLAN.md) adds real wall geometry
+// (`wallCellBounds`, below) on the same `viewport_geometry`, replacing
+// `dungeon-view.ts`'s old `DEPTH_SCALE` closed-form approximation — floor/
+// ceiling and walls now derive from the identical source table, so they
+// meet at the same pixel by construction instead of two independently-
+// approximated shapes happening to look close. `show_cel2`'s `plac`
+// (`SD_POSITION`) anchoring and native-size blitting (vs. this port's
+// Canvas2D stretch) remain unported — see port-graph.md for the gap.
 
 export const VIEW3D_X = 4;
 export const VIEW3D_Z = 5;
@@ -134,5 +136,55 @@ export function floorCeilBand(geometry: ViewportGeometry, depth: number, lateral
     xrNear: reproject(xr, yNear),
     xlFar: reproject(xl, yFar),
     xrFar: reproject(xr, yFar),
+  };
+}
+
+// Phase B2: real wall geometry, replacing the closed-form DEPTH_SCALE
+// approximation. `show_cel2`'s `x_table` (front walls) and `show_cel`'s
+// `z_table` (receding side walls) both key off `viewport_geometry[j][0][d]`
+// evaluated *directly at the target depth d* — unlike floor/ceiling's
+// f_table/c_table, which always reproject from the undecayed depth-0 fan
+// by a y-ratio. Concretely: `create_tables`' x_table loop computes
+// `xpos = MIDDLE_X - viewport_geometry[x][0][y+1].x` and (for the other
+// side of the same cell) `max_x = MIDDLE_X - viewport_geometry[x-1][0]
+// [y+1].x` — i.e. a lateral cell's screen-space left/right edges are the
+// depth-d fan values themselves, never reprojected from another depth.
+// (x_table/z_table always reference edge 0, the floor-side fan — verified
+// in both loops' source.) Since a lateral cell's *width* differs at every
+// depth anyway (the corridor narrows), a single evaluation at depth `d`
+// gives one edge of a wall quad; the other edge comes from evaluating
+// again at `d+1`(same as floor/ceiling's near/far pairing) — front walls
+// use one depth (`d+1`, the far boundary of the current cell, matching
+// existing convention), receding side walls use both `d` and `d+1` for
+// their near/far trapezoid corners, same shape as floorCeilBand's but at
+// direct (not reprojected) x-values.
+export interface WallBounds {
+  xl: number;
+  xr: number;
+  yTop: number;
+  yBottom: number;
+}
+
+export function wallCellBounds(geometry: ViewportGeometry, depth: number, lateral: number): WallBounds {
+  const edge: Edge = 0;
+  let xl: number, xr: number;
+  if (lateral === 0) {
+    const v = geometry[0]![edge]![depth]!.x;
+    xl = -v;
+    xr = v;
+  } else if (lateral < 0) {
+    const k = -lateral;
+    xl = -geometry[k]![edge]![depth]!.x;
+    xr = -geometry[k - 1]![edge]![depth]!.x;
+  } else {
+    const k = lateral;
+    xl = geometry[k - 1]![edge]![depth]!.x;
+    xr = geometry[k]![edge]![depth]!.x;
+  }
+  return {
+    xl: xl + MIDDLE_X,
+    xr: xr + MIDDLE_X,
+    yTop: geometry[0]![1]![depth]!.y + MIDDLE_Y,
+    yBottom: geometry[0]![0]![depth]!.y + MIDDLE_Y,
   };
 }
