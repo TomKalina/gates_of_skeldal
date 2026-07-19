@@ -140,12 +140,30 @@ const EMPTY_TEXTURE_NAME = 'EMPTY.PCX';
 // genuinely ambiguous either way and left unflipped since it makes no
 // visible difference. Known-incomplete for other maps — revisit alongside
 // the double-colorkey index list (below) once D3 makes them reachable.
+//
+// Correction (2026-07-19): LES1A03-06* were removed after a user report
+// that the sector-15 door (this map's other A_OPEN_CLOSE door, sec=7,
+// spanning LES1A01A..08A across its 8-frame swing) looked wrong specifically
+// mid-swing. The survey had decoded every candidate with only the single
+// wall/decoration colorkey (index 1) — correct for most files, but this
+// door's frames also need the SECOND index (0) that
+// doubleColorkeyMainTextureIndices already applies for every A_OPEN_CLOSE
+// frame at actual render time. Un-punched, that second index left a bright
+// red sliver across the top of frames 03A-06A in the survey dump, which
+// both a reviewing agent and a first-pass manual check misread as "this
+// image is upside down" rather than "this image has an unrelated colorkey
+// bug in this dump." Re-decoding with the real double-key applied shows
+// all 8 frames (01A-08A) already read as one coherent, consistently-
+// oriented door swing (hinges/handle at a fixed natural height, threshold
+// always at the bottom) — no flip needed anywhere in this sequence. The
+// other door (sec=15, LES1A11A..18A) was re-checked the same way and holds
+// up as never needing a flip either. Lesson: any texture covered by
+// doubleColorkeyMainTextureIndices (niche or door frames) must be
+// re-decoded with that same double-key before judging its orientation —
+// a single-key survey dump of one of these can look "wrong" for reasons
+// that have nothing to do with orientation.
 const VERTICALLY_FLIPPED_TEXTURES = new Set(
   [
-    'LES1A03A', 'LES1A03B', 'LES1A03C',
-    'LES1A04A', 'LES1A04B', 'LES1A04C',
-    'LES1A05A', 'LES1A05B', 'LES1A05C',
-    'LES1A06A', 'LES1A06B', 'LES1A06C',
     'LES1A21A', 'LES1A22A', 'LES1A23A', 'LES1A24A',
     'LES1W03A',
     'LES1W15A', 'LES1W15B',

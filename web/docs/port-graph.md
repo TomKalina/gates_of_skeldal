@@ -292,6 +292,42 @@ parity vs C build where applicable). Updated as issues close.
     per-map flip lists — this is now the *second* hardcoded per-`LESPRED.MAP`
     exception list alongside the double-colorkey index one above; both will
     need revisiting once D3 makes other maps reachable).
+  - **Second correction, same day**: after the fix above shipped, a live
+    user report ("door is correct from outside now, but flipped when I'm
+    inside; trees still flipped too") turned out to be a *methodology* bug
+    in the visual survey, not a new orientation bug. The sector-15 door's
+    8-frame swing (`sec=7`, `LES1A01A..08A`) had 4 of its frames
+    (`LES1A03-06*`) misjudged as needing a flip — but the survey had
+    decoded every candidate with only the ordinary single wall colorkey
+    (index 1), not replicating `doubleColorkeyMainTextureIndices`'s second
+    index for door/niche frames. Left un-punched, that second index paints
+    a bright red sliver across the top of exactly these mid-swing frames,
+    which reads as "this looks wrong" and gets misdiagnosed as an
+    orientation bug rather than the unrelated colorkey bug it actually is.
+    Re-decoding with the real double-key applied shows all 8 frames of both
+    this map's doors read as one coherent, consistently-oriented swing —
+    no flip needed anywhere in either door sequence; `LES1A03-06*` removed
+    from `VERTICALLY_FLIPPED_TEXTURES`. Verified live from both sides of
+    the door (opening from inside, closing from outside) — both correct.
+    The generalizable lesson, now the actual "system" for judging any
+    future texture's orientation, since a single ad-hoc visual read keeps
+    proving unreliable on its own: (1) always re-decode with whatever
+    colorkey treatment the texture will *actually* receive at render time
+    (single-key, double-key-for-niche, double-key-for-door — check which
+    applies) before judging orientation, never a plain single-key dump;
+    (2) never judge one frame of a multi-frame sequence in isolation — a
+    door/animation's frames must share one orientation by construction, so
+    judge the whole sequence together and require internal consistency;
+    (3) treat any survey verdict as provisional until cross-checked against
+    an actual in-game screenshot of that exact texture, not just an
+    isolated decoded PNG — the isolated-PNG view and the live composited
+    view can read differently even for the identical pixels. ("Trees still
+    flipped" from the same report was not independently reproduced — the
+    reachable, walkable forest view was re-screenshotted and matches the
+    reference's canopy-top/undergrowth-bottom composition; likely the same
+    stale-browser-tab issue flagged earlier, or referring to a still-
+    unverified texture outside the reachable area — flagged for the user
+    to re-check with a hard refresh / a fresh screenshot if it recurs.)
   - **Real dungeon UI chrome**, added against a reference screenshot showing
     the actual top/bottom bars: the top status bar is one real asset,
     `TOPBAR.PCX` (640x16 — button/icon x-boundaries measured directly off it
