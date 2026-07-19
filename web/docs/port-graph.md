@@ -18,16 +18,17 @@ parity vs C build where applicable). Updated as issues close.
 - Early vertical slice (`src/game/main-menu.ts`) jumps ahead of strict issue
   order to get a click/keyboard-navigable main menu on screen before the real
   platform kernel (#7) and graphics lib (#8) exist. It uses a plain Canvas2D
-  context and a hardcoded 5-way band split standing in for the real per-pixel
-  `MENUVOL5.PCX` hotspot mask. Real `MAINMENU.PCX`/`LOGO00.PCX` art is decoded
-  and drawn (via `src/formats/ddl-archive.ts` + `src/codecs/pcx.ts`). In dev,
-  `vite.config.ts` serves the developer's own `data/SKELDAL.DDL` at
-  `/dev-data/SKELDAL.DDL` (dev server only, never bundled into a build) and
-  `main.ts` auto-fetches it on load — no click needed. Falls back to a plain
-  `<input type=file>` prompt (`src/platform/asset-source.ts`) when that route
-  404s, which is also the only path in a real deployment until the real
-  OPFS-backed intake screen (#2) lands. Replace the band-split hit-test and
-  the fallback file picker when #2/#8 land.
+  context. Button hit-testing uses the real per-pixel `MENUVOL5.PCX` hotspot
+  mask (see the GUI toolkit note under Phase C / `src/gui/hotspot-mask.ts`),
+  falling back to an equal 5-way band split only if that asset fails to load.
+  Real `MAINMENU.PCX`/`LOGO00.PCX` art is decoded and drawn (via
+  `src/formats/ddl-archive.ts` + `src/codecs/pcx.ts`). In dev, `vite.config.ts`
+  serves the developer's own `data/SKELDAL.DDL` at `/dev-data/SKELDAL.DDL`
+  (dev server only, never bundled into a build) and `main.ts` auto-fetches it
+  on load — no click needed. Falls back to a plain `<input type=file>` prompt
+  (`src/platform/asset-source.ts`) when that route 404s, which is also the
+  only path in a real deployment until the real OPFS-backed intake screen
+  (#2) lands. Replace the fallback file picker when #2 lands.
 - Character creation (`src/game/character-creation.ts`) merges chargen.c's two
   pages (portrait+wheel, then a full parchment character sheet) into one
   screen. Rebuilt against 4 real reference screenshots of the original build
@@ -47,10 +48,13 @@ parity vs C build where applicable). Updated as issues close.
   future asset that combines colorkey transparency with layering over other
   canvas content.
   - Uses a native `<input>` for the name field and `window.confirm` for the
-    cancel prompt instead of the real GUI toolkit (#8/#9) and the exact
-    `message()` dialog wording.
-  - Button hit-testing is plain rects, not `CHARGENM.PCX`'s per-pixel mask —
-    same placeholder pattern as the main menu.
+    cancel prompt instead of the exact `message()` dialog wording (#9's
+    per-pixel button hit-testing is done, see below — this remaining gap is
+    just dialog chrome/styling, not hit-testing).
+  - Button hit-testing uses the real per-pixel `CHARGENM.PCX` hotspot mask
+    (0=Přijmout, 1=Start hry, 2=Vymazat, 3=Vše znovu), falling back to the
+    old hand-measured `BUTTONS.*` rects only if that asset fails to load —
+    see the Phase C note below and `src/gui/hotspot-mask.ts`.
   - Attack/defense/actions, resistances, weapon-bonuses, and the Jídlo/Voda
     gauges show the fixed values `generuj_postavu` always sets for a fresh,
     unequipped level-1 character — not fabricated, just not tracked as
@@ -661,6 +665,68 @@ parity vs C build where applicable). Updated as issues close.
     wash — confirms the stepped-not-gradient behavior matches the source
     exactly, not over- or under-applied. Compared directly against
     `docs/reference/dungeon-table-scene.png`.
+  - **Phase C — real GUI hit-testing** (`libs/gui.c`/`libs/basicobj.c`
+    ruled out, `game/clk_map.c` ported, 2026-07-19). Investigated (dispatched
+    research agent) whether `libs/gui.c` (1005 lines) + `libs/basicobj.c`
+    (1346 lines)'s `OBJREC`/`WINDOW` object model — the originally-planned
+    Phase C toolkit — is what drives menu/chargen button clicks. It is
+    **not**: neither `game/menu.c` nor `game/chargen.c` calls `define()`/
+    `button()`/etc. at all (`chargen.c` `#include`s the headers but never
+    instantiates an `OBJREC`). Porting that toolkit would have added ~2350
+    lines of TS with no consumer for these two screens — **not ported**.
+    (Aside, not acted on: a quick grep for real `OBJREC`/`define()` call
+    sites across `game/*.c` turned up only `interfac.c` and `setup.c` — the
+    toolkit isn't dead code game-wide, just unused by menu/chargen/inv.)
+    The real mechanism, confirmed by reading `game/clk_map.c`: a `T_CLK_MAP`
+    struct (`{id,xlu,ylu,xrb,yrb,proc,mask,cursor}`) array + `find_in_click_
+    map()` gives each screen one loose outer rect and a dispatch proc; the
+    proc itself (`menu.c`'s `promacknuti()`, `chargen.c`'s `go_next_page()`)
+    then reads the RAW PALETTE INDEX out of a decoded 8-bit PCX buffer at
+    the click position — `MENUVOL5.PCX` for the menu, `CHARGENM.PCX` for
+    chargen — where index 0 means no hotspot and index N means button N-1.
+    These two PCX files are never drawn on screen; they're pure per-pixel
+    hit-test data (also independently confirmed by decoding and viewing
+    both: `MENUVOL5.PCX` is 206×178 with 5 distinct non-black colors in
+    wavy, hand-painted (non-rectangular) bands; `CHARGENM.PCX` is 120×102
+    with 4). Ported 1:1:
+    - `codecs/pcx.ts`'s `decodePcx` now also returns `.indices` (the raw
+      per-pixel palette index array, alongside the existing `.rgba`) —
+      `libs/pcx.c`'s `load_pcx` decodes scanlines identically for both, so
+      no new decode path was needed, just exposing data already computed.
+    - `src/gui/hotspot-mask.ts` (new): `HotspotMask` + `hotspotAt(mask,
+      regionX, regionY, x, y)` — a direct port of `promacknuti`/
+      `go_next_page`'s `z = ablock(...) + 6 + 512; z += xr + yr*w[0]; id =
+      *z - 1` byte-offset lookup (6 bytes header + 512 bytes/256-color
+      palette, then row-major index bytes).
+    - `gui/menu-nav.ts`: `MENU_RECT` reverted to the real (loose) `T_CLK_MAP`
+      rect `{220,300,206,177}` — a previous session had narrowed
+      y/height to compensate for the mask pipeline not existing yet, which
+      is now wrong to keep. `hitTestMenu` is mask-based; `hitTestMenuBands`
+      (the old equal-5-way-band split) kept as a graceful-degradation
+      fallback if `MENUVOL5.PCX` fails to load, matching this codebase's
+      existing missing-asset conventions.
+    - `game/character-creation.ts`: `CHARGENM_RECT` (`{520,378,120,102}`,
+      exactly matching `CHARGENM.PCX`'s real decoded dimensions) +
+      `hitTestChargenButtons()`, dispatching on the real button order
+      (0=Přijmout, 1=Start hry, 2=Vymazat, 3=Vše znovu, confirmed via
+      `lang/en/ui.csv:144-147`), falling back to the old hand-measured
+      `BUTTONS.*` rects only if the mask is missing. `BUTTONS.*` itself is
+      unchanged and still used for drawing the gold/gray button-state
+      boxes — a separate concern from hit-testing.
+    - Explicitly did **not** touch `FACE_GRID`/`WHEEL_RECT` — confirmed via
+      the same investigation that both are driven by real arithmetic in
+      the source (`select_xicht`'s grid math, `vol_vlastnosti`'s
+      pearl-bbox+atan2), not a mask, so no change was needed there.
+    Verified live (Playwright against the dev server + real `SKELDAL.DDL`):
+    decoded both masks directly to find real non-background pixel
+    coordinates for each button (clicking blindly inside the old
+    approximate rects lands on background ~30-50% of the time by design —
+    the whole point of the real art is irregular button shapes with dead
+    space around them, not full rectangles). Clicked New Game → chargen →
+    picked a portrait/name → Vymazat (erase, verified it correctly
+    discarded back to select mode) → re-rolled → Přijmout (roll then
+    accept) → Start hry, reaching the dungeon view with the created
+    character in the roster; 0 console errors throughout.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -683,8 +749,8 @@ parity vs C build where applicable). Updated as issues close.
 | `globmap.c` | overworld travel map (GLOBMAP.DAT DSL) | `src/game/worldmap.ts` | pending |
 | `kniha.c` | story book renderer | `src/game/book.ts` | pending |
 | `interfac.c` | GUI widgets, message boxes, BFS pathfinder | `src/gui/interfac.ts` | pending |
-| `clk_map.c` | mouse click-region dispatch | `src/game/clickmap.ts` | pending |
-| `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (placeholder slice, no assets/animation) |
+| `clk_map.c` | mouse click-region dispatch (`T_CLK_MAP` + per-pixel PCX mask) | `src/gui/hotspot-mask.ts` | ported (menu/chargen consumers only — see Phase C note) |
+| `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (real MENUVOL5.PCX hit-testing ported; art/animation still placeholder) |
 | `setup.c` | settings screens | `src/gui/settings.ts` | pending |
 | `chargen.c` | character generation | `src/game/attribute-wheel.ts` (wheel math), `src/game/party.ts` (rolling/roster), `src/game/character-creation.ts` (screen) | in-progress, see note below |
 | `sndandmus.c` | game-side sound/music control | `src/audio/game-audio.ts` | pending |
@@ -707,8 +773,8 @@ parity vs C build where applicable). Updated as issues close.
 | `event.c` | cooperative task/event framework | `src/platform/events.ts` | pending |
 | `devices.c` | input device abstraction | `src/platform/devices.ts` | pending |
 | `bmouse.c` | mouse cursor handling | `src/platform/mouse.ts` | pending |
-| `gui.c` | GUI object core | `src/gui/core.ts` | pending |
-| `basicobj.c` | basic GUI widgets | `src/gui/basicobj.ts` | pending |
+| `gui.c` | GUI object core (`OBJREC`/`WINDOW`, rect hit-testing) | `src/gui/core.ts` | not needed for menu/chargen/inv — confirmed dead code there (see Phase C note); still used by `interfac.c`/`setup.c`, revisit when those are ported |
+| `basicobj.c` | basic GUI widgets | `src/gui/basicobj.ts` | not needed for menu/chargen/inv — see `gui.c` row |
 | `inicfg.c` | INI config parser | `src/io/ini.ts` | pending |
 | `pcx.c` | PCX-family image decoder | `src/codecs/pcx.ts` | ported (RLE + palette decode; validated pixel-for-pixel against real `MAINMENU.PCX`/`LOGO00.PCX` via a throwaway script, see #4/#5) |
 | `mgifmem.c` | MGIF video decoder (memory) | `src/codecs/mgif.ts` | pending |

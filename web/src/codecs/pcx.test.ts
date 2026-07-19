@@ -42,6 +42,15 @@ describe('decodePcx', () => {
     expect(pixel(1, 1)).toEqual([70, 80, 90, 255]);
   });
 
+  it('exposes the raw per-pixel palette index alongside rgba, regardless of transparentIndex', () => {
+    // "Hotspot mask" assets (MENUVOL5.PCX, CHARGENM.PCX) reserve this raw
+    // byte as a button-ID lookup, not real pixel color — see
+    // gui/hotspot-mask.ts. Decoded with no transparentIndex here to prove
+    // the index array doesn't depend on that option at all.
+    const image = decodePcx(buildPcx());
+    expect([...image.indices]).toEqual([1, 1, 2, 3]);
+  });
+
   it('zeroes alpha for the given transparentIndex, leaving other pixels opaque', () => {
     const image = decodePcx(buildPcx(), { transparentIndex: 1 });
     const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];

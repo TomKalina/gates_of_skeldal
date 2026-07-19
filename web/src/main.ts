@@ -6,6 +6,7 @@ import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet } from
 import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
+import type { HotspotMask } from './gui/hotspot-mask';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { decodePcx, flipImageDataHorizontally, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
@@ -78,12 +79,25 @@ function decodeIfPresent(archive: DDLArchive, name: string, transparentIndex?: n
   return raw ? pcxToImageData(decodePcx(raw, transparentIndex !== undefined ? { transparentIndex } : {})) : undefined;
 }
 
+// MENUVOL5.PCX/CHARGENM.PCX are never rendered in the real engine — pure
+// per-pixel hit-test data (see gui/hotspot-mask.ts's header comment).
+// Decoded once for the raw palette-index array; the rgba/colorkey side of
+// decodePcx's output is irrelevant here and discarded.
+function loadHotspotMaskIfPresent(archive: DDLArchive, name: string): HotspotMask | undefined {
+  const raw = archive.extract(name);
+  if (!raw) return undefined;
+  const { width, height, indices } = decodePcx(raw);
+  return { width, height, indices };
+}
+
 function loadMenuAssets(archive: DDLArchive): MainMenuAssets {
   const assets: MainMenuAssets = {};
   const background = decodeIfPresent(archive, 'MAINMENU.PCX');
   if (background) assets.background = background;
   const logoImage = decodeIfPresent(archive, 'LOGO00.PCX');
   if (logoImage) assets.logo = { image: logoImage, y: 56 };
+  const hotspotMask = loadHotspotMaskIfPresent(archive, 'MENUVOL5.PCX');
+  if (hotspotMask) assets.hotspotMask = hotspotMask;
   return assets;
 }
 
@@ -103,6 +117,8 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   if (arch) assets.arch = arch;
   const svitek = decodeIfPresent(archive, 'SVITEK.PCX');
   if (svitek) assets.svitek = svitek;
+  const hotspotMask = loadHotspotMaskIfPresent(archive, 'CHARGENM.PCX');
+  if (hotspotMask) assets.hotspotMask = hotspotMask;
 
   const bodySprites = new Map<number, ImageData>();
   for (let i = 0; i < 8; i++) {

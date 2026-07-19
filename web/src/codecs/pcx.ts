@@ -7,6 +7,16 @@ export interface PcxImage {
   width: number;
   height: number;
   rgba: Uint8ClampedArray<ArrayBuffer>;
+  // Raw per-pixel palette index (row-major, before any RGB/transparency
+  // lookup) — always populated, since decoding it is already a byproduct
+  // of building `rgba`. This is the exact byte a handful of real "hotspot
+  // mask" assets (MENUVOL5.PCX, CHARGENM.PCX) reserve as a hit-test/
+  // button-ID lookup table rather than real pixel color — see
+  // game/clk_map.c's promacknuti()/go_next_page(), which index into this
+  // same raw-index array (`ablock(mask)+6+512` in the real engine's
+  // in-memory layout) to find which button is under the cursor. Ordinary
+  // callers only need `rgba`; `gui/hotspot-mask.ts` is what reads this.
+  indices: Uint8Array;
 }
 
 const HEADER_SIZE = 128;
@@ -80,12 +90,14 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
   );
 
   const rgba = new Uint8ClampedArray(new ArrayBuffer(width * height * 4));
+  const indices = new Uint8Array(width * height);
   let srcPos = HEADER_SIZE;
   for (let y = 0; y < height; y++) {
     const { row, bytesConsumed } = decompressLine(data, srcPos, bytesPerLine);
     srcPos += bytesConsumed;
     for (let x = 0; x < width; x++) {
       const paletteIndex = row[x] ?? 0;
+      indices[y * width + x] = paletteIndex;
       const out = (y * width + x) * 4;
       if (transparentIndices.has(paletteIndex)) {
         rgba[out + 3] = 0;
@@ -99,7 +111,7 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
     }
   }
 
-  return { width, height, rgba };
+  return { width, height, rgba, indices };
 }
 
 export function pcxToImageData(image: PcxImage): ImageData {

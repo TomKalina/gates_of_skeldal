@@ -288,14 +288,49 @@ Both correctly deferred until another map's data makes them verifiable.
   unrendered) with no artifacts and no regressions in the start room, door
   swing, or tree orientation.
 
-## Phase C — GUI toolkit (issue #9 remainder)
+## Phase C — GUI toolkit (issue #9 remainder) — **done** (2026-07-19)
 
-Port `libs/gui.c` + `libs/basicobj.c` object model → `src/gui/core.ts`,
-`src/gui/basicobj.ts`. Then re-render main menu and chargen through it
-with per-pixel hotspot masks (`MENUVOL5.PCX`, `CHARGENM.PCX`), deleting the
-hand-measured rects. **Done when**: both screens still pass their visual
-verification, and all hardcoded rect constants are gone from
-`menu-nav.ts`/`character-creation.ts`.
+Correction to this plan's original premise: `libs/gui.c` (1005 lines) +
+`libs/basicobj.c` (1346 lines)'s `OBJREC`/`WINDOW` object model
+(rectangle-only hit-testing via `mouse_in_object()`) turned out to be a
+dead end — neither `game/menu.c` nor `game/chargen.c` uses it at all
+(`chargen.c` `#include`s the headers but never calls `define()`/
+`button()`/etc.). Porting it would have added ~2350 lines of TS with no
+consumer. **Not ported, on purpose.**
+
+The real mechanism is `game/clk_map.c`'s `T_CLK_MAP` struct
+(`{id,xlu,ylu,xrb,yrb,proc,mask,cursor}`) + `find_in_click_map()`
+dispatch, combined with two tiny per-screen functions that index
+directly into a decoded 8-bit PCX buffer — `menu.c`'s `promacknuti()`
+(reads `MENUVOL5.PCX`) and `chargen.c`'s `go_next_page()` (reads
+`CHARGENM.PCX`): raw palette index 0 = no hotspot, N = button N-1.
+Ported 1:1 as `src/gui/hotspot-mask.ts` (`HotspotMask` + `hotspotAt`) —
+decodes the same raw per-pixel index array `libs/pcx.c`'s `load_pcx`
+produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
+
+- `menu-nav.ts`: `MENU_RECT` reverted to the real (loose) `T_CLK_MAP`
+  outer rect `{220,300,206,177}` — an earlier session had narrowed it to
+  compensate for the mask not existing yet; `hitTestMenu` is now
+  mask-based, with `hitTestMenuBands` (equal 5-way split) kept only as a
+  graceful-degradation fallback if `MENUVOL5.PCX` fails to load.
+- `character-creation.ts`: added `CHARGENM_RECT` (`{520,378,120,102}`,
+  matching `CHARGENM.PCX`'s real decoded dimensions exactly) and
+  `hitTestChargenButtons()`, mask-driven with the same real button
+  order (0=Přijmout, 1=Start hry, 2=Vymazat, 3=Vše znovu, per
+  `lang/en/ui.csv:144-147`); the old `BUTTONS.*` rects are kept as the
+  fallback and for drawing the highlight/gray-out boxes (a separate,
+  unchanged concern from hit-testing).
+- `FACE_GRID`/`WHEEL_RECT` confirmed **not** mask-driven — real source
+  uses plain arithmetic (`select_xicht`'s grid math, `vol_vlastnosti`'s
+  pearl-bbox+atan2) — left untouched.
+- Verified live: both `MENUVOL5.PCX` (206×178, 5 hand-painted bands) and
+  `CHARGENM.PCX` (120×102, 4 bands) are genuinely non-rectangular —
+  ~31%/~50% of each mask's own bounding box is unpainted background
+  (raw index 0) even though it's the real button art, not dead space a
+  rect approximation would have caught. Clicked through New Game →
+  chargen erase → roll → accept → Start hry end-to-end against the real
+  masks (Playwright), 0 console errors, reached the dungeon view with
+  the created character in the roster.
 
 ## Phase D — World content (issues #6, #13, #14 parts)
 

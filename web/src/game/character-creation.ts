@@ -18,6 +18,7 @@ import {
 } from './party';
 import { canvasRectToClientRect, clientToCanvasPoint } from '../platform/canvas-transform';
 import { faceThumbnail as sharedFaceThumbnail, imageDataToCanvas } from './portraits';
+import { hotspotAt, type HotspotMask } from '../gui/hotspot-mask';
 
 // chargen.c displays its 8 portraits in this file-index order (poradi[]) —
 // see party.ts's PORTRAIT_DISPLAY_ORDER comment for why this isn't 0..7.
@@ -54,6 +55,15 @@ const BUTTONS = {
   resetAll: { x: BUTTONS_X, y: 460, width: BUTTON_WIDTH, height: BUTTON_HEIGHT, label: 'Vše znovu' },
 } as const;
 
+// chargen.c's go_next_page(): reads CHARGENM.PCX's raw palette index (the
+// real per-pixel button mask, see gui/hotspot-mask.ts) at the click position
+// relative to this button stack's T_CLK_MAP rect (520,378 -> 639,479), and
+// dispatches on the resulting 0-based id — 0=Accept, 1=Start Game, 2=Delete,
+// 3=All Again (lang/en/ui.csv:144-147). CHARGENM.PCX decodes to exactly this
+// rect's width/height (120x102).
+const CHARGENM_RECT = { x: BUTTONS_X, y: 378, width: 120, height: 102 } as const;
+const CHARGENM_BUTTON_ORDER = ['accept', 'start', 'erase', 'resetAll'] as const;
+
 // The real screen has exactly one portrait box in the bottom panel — it
 // always tracks whichever character is currently being created (selected
 // portrait + live name-input value + pending level), never the accepted
@@ -87,6 +97,9 @@ export interface CharacterCreationAssets {
   pearl?: ImageData;
   arch?: ImageData;
   bodySprites?: ReadonlyMap<number, ImageData>;
+  // CHARGENM.PCX's raw palette-index data (see gui/hotspot-mask.ts) — the
+  // real per-pixel button hit-test. Falls back to BUTTONS' rects if missing.
+  hotspotMask?: HotspotMask;
 }
 
 export interface CharacterCreationHandle {
@@ -96,6 +109,20 @@ export interface CharacterCreationHandle {
 
 function rectContains(rect: { x: number; y: number; width: number; height: number }, x: number, y: number): boolean {
   return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
+}
+
+// Mirrors chargen.c's go_next_page(): mask-based hit test against the real
+// CHARGENM.PCX per-pixel button shapes, falling back to BUTTONS' rects
+// (this port's pre-mask approximation) only if that asset failed to load.
+function hitTestChargenButtons(mask: HotspotMask | undefined, x: number, y: number): keyof typeof BUTTONS | null {
+  if (mask) {
+    const hit = hotspotAt(mask, CHARGENM_RECT.x, CHARGENM_RECT.y, x, y);
+    return hit === null ? null : (CHARGENM_BUTTON_ORDER[hit] ?? null);
+  }
+  for (const key of CHARGENM_BUTTON_ORDER) {
+    if (rectContains(BUTTONS[key], x, y)) return key;
+  }
+  return null;
 }
 
 // The reference roster box shows a small bust/face crop, not the full-body
@@ -679,12 +706,13 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
       }
     }
 
-    if (rectContains(BUTTONS.accept, x, y)) {
+    const button = hitTestChargenButtons(assets.hotspotMask, x, y);
+    if (button === 'accept') {
       if (mode === 'select') rollPendingCharacter();
       else acceptPendingCharacter();
-    } else if (rectContains(BUTTONS.start, x, y)) startGame();
-    else if (rectContains(BUTTONS.erase, x, y)) eraseCurrent();
-    else if (rectContains(BUTTONS.resetAll, x, y)) resetAll();
+    } else if (button === 'start') startGame();
+    else if (button === 'erase') eraseCurrent();
+    else if (button === 'resetAll') resetAll();
   }
 
   function updateWheelFromPoint(x: number, y: number): void {
