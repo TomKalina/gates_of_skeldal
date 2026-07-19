@@ -556,7 +556,55 @@ parity vs C build where applicable). Updated as issues close.
     and native-size blitting — textures still stretch to fill the cell via
     Canvas2D `drawImage` rather than drawing at their real table-derived
     size with cropping, so niche-prop proportions and off-center secondary
-    walls (`xsec`/`ysec`) are still approximate. Remains B2 scope.
+    walls (`xsec`/`ysec`) are still approximate. Remains B2 scope. (Real
+    data check: `SD_POSITION` is 0/1204 sides in LESPRED.MAP — genuinely
+    unverifiable against this map, correctly deferred rather than built
+    against synthetic fixtures only.)
+  - **Phase B3 — decorative arch overlay** (`oblouk & 0xf`, `A_STRARC`/
+    `A_STRARC2`, 2026-07-19). A real, previously-completely-unrendered
+    feature — investigated via a dispatched research agent reading
+    `draw_basic_sector`/`realgame.c` directly (this project's own earlier
+    doc comment describing `oblouk`'s bit layout turned out accurate, but
+    the *gating* — `SD_LEFT_ARC`/`SD_RIGHT_ARC`, 32-bit `flags` bits, not
+    part of `oblouk` at all — hadn't been identified before). `A_STRARC`
+    (0x8008)/`A_STRARC2` (0x800b) are NUL-separated filename lists, the
+    exact same format `mainTextures`/`ceilTextures`/etc. already use —
+    confirmed empirically by parsing the raw block bytes directly
+    (`LES1W06C.PCX`/`LES1W17A.PCX` and `LES1W06B.PCX`/`LES1W17A.PCX`),
+    no new struct needed. `GET_OBLOUK(p) = (p->oblouk&0xf) + (p->
+    prim_anim>>4)` — the arch index shares the primary texture's animation-
+    frame offset, so an animated door's arch advances in lockstep with its
+    swing. Real-data check before implementing (this session's now-
+    standard practice after being burned twice by unverifiable/
+    misdiagnosed textures): 623/1204 real sides have a non-zero
+    `oblouk&0xf`, but only 218 also carry `SD_LEFT_ARC`/`SD_RIGHT_ARC` —
+    65% of non-zero indices are inert, so the gate genuinely matters and
+    isn't redundant with a simple non-zero check.
+    Drawn (`dungeon-view.ts`'s `drawFrontWall`) at the exact same cell rect
+    as the main wall texture, *before* it — matches `draw_basic_sector`'s
+    call order (arch first, so door/window art with colorkey-punched edges
+    layers on top of the frame behind it) and its parameters (`xofs=0,
+    yofs=0`, no `SD_POSITION` shift — confirmed the source never applies
+    `plac` to these two calls specifically, unlike the main/sec draws).
+    `OBL2_NUM` (right half, `A_STRARC2`) is drawn via `show_cel2`'s
+    `rev==2` branch — re-confirmed via this investigation that this
+    mirrors the *destination screen-write direction*, not source pixel
+    order (consistent with the earlier, independent wall-mirror
+    investigation's finding that the engine never reverses source pixels
+    anywhere) — so a horizontal flip is baked into every `archRight`
+    texture once at load time (`codecs/pcx.ts`'s `flipImageDataHorizontally`,
+    unconditional for the whole bank, a structural engine rule rather than
+    a per-file judgment call like `VERTICALLY_FLIPPED_TEXTURES`).
+    Verified via direct decode that `LES1W06B.PCX`/`LES1W06C.PCX` are
+    genuinely distinct hand-painted assets (different pixel dimensions,
+    320x750 vs 500x750) rather than identical copies — ruling out "just
+    reuse the same image for both halves." Both also reserve the same
+    second colorkey index (0) the ordinary side-wall bank already uses
+    (confirmed by decode, same red-bleed-then-clean pattern as every other
+    double-colorkey fix this session). 6 new unit tests. Verified live: a
+    visually dramatic tree-trunk/branch frame now appears across the
+    forest scene, previously entirely unrendered; start room, door swing,
+    and tree orientation all re-checked with no regressions.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 

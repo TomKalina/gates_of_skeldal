@@ -219,9 +219,40 @@ build via Playwright; pixel-diff in CI (assets stay local/gitignored).
 scripted walk of LESPRED.MAP.
 
 ### B3. Remaining side features
-`SD_SHIFTUP` secondary-wall raising, `oblouk & 0xf` arch textures
-(`OBL_NUM`/`OBL2_NUM` sets, `A_STRARC`/`A_STRARC2` blocks), `SD_SPEC`,
-distance shading (`SHADE_PAL` tables, `secnd_shade`, `MC_SHADING`).
+`SD_SHIFTUP` secondary-wall raising, `SD_SPEC`, distance shading
+(`SHADE_PAL` tables, `secnd_shade`, `MC_SHADING`).
+
+- **`oblouk & 0xf` arch textures — DONE** (2026-07-19). Ported
+  `A_STRARC`/`A_STRARC2` block parsing (`map-file.ts`'s `archLeftTextures`/
+  `archRightTextures` — same NUL-separated-filename-list format as every
+  other texture bank, no new struct needed) and `draw_basic_sector`'s two
+  `show_cel2` arch calls (`dungeon.ts`'s `archTextureIndex` + `ViewCell.
+  frontArchLeftTexture`/`frontArchRightTexture`, gated by `SD_LEFT_ARC`/
+  `SD_RIGHT_ARC` — 32-bit `flags` bits, *not* part of `oblouk`, confirmed
+  via a dispatched research agent reading `draw_basic_sector` directly).
+  Real, verified-present data: 623/1204 real sides in LESPRED.MAP have a
+  non-zero `oblouk&0xf`, but only 218 also carry one of the gating flags —
+  the rest are inert, confirming the gate is required, a non-zero index
+  alone isn't sufficient. Drawn before the main/sec wall texture (matching
+  `draw_basic_sector`'s call order) at the identical cell rect, no
+  `SD_POSITION` shift (the source never applies `plac` to these two
+  calls). `OBL2_NUM` (right half) is drawn via `show_cel2`'s `rev==2`
+  branch, which mirrors the *destination write direction*, not the source
+  pixels (consistent with the earlier wall-mirror investigation's finding
+  that the engine never reverses source pixel order) — replicated by
+  baking an ordinary horizontal flip into every `archRight` texture once
+  at load time (`codecs/pcx.ts`'s `flipImageDataHorizontally`), same
+  "port the result, not the technique" approach as the vertical flip and
+  the floor/ceiling/wall geometry. Verified via direct decode that
+  `LES1W06B.PCX`/`LES1W06C.PCX` (this map's arch textures) are genuinely
+  distinct hand-painted assets, not identical mirror-copies of each other
+  — both need the second colorkey index (0), same convention as the
+  ordinary side-wall bank, confirmed by decode. 6 new unit tests (3 in
+  `dungeon.test.ts` for the gating/index logic, 1 in `map-file.test.ts`
+  for block parsing). Verified live: a real, visually dramatic tree-trunk/
+  branch frame now appears in the forest scene (previously entirely
+  unrendered) with no artifacts and no regressions in the start room, door
+  swing, or tree orientation.
 
 ## Phase C — GUI toolkit (issue #9 remainder)
 

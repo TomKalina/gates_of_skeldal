@@ -8,7 +8,7 @@ import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
-import { decodePcx, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
+import { decodePcx, flipImageDataHorizontally, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
@@ -262,6 +262,17 @@ function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> 
   return indices;
 }
 
+// show_cel2's rev==2 branch always mirrors the OBL2_NUM (right-arch) bank's
+// screen-write direction, unconditionally — not a per-file judgment call
+// like VERTICALLY_FLIPPED_TEXTURES, a structural rule confirmed straight
+// from the source (see codecs/pcx.ts's flipImageDataHorizontally). Applied
+// to every entry in the bank once, at load time.
+function flipTextureSetHorizontally(textures: ReadonlyMap<number, ImageData>): ReadonlyMap<number, ImageData> {
+  const flipped = new Map<number, ImageData>();
+  for (const [key, image] of textures) flipped.set(key, flipImageDataHorizontally(image));
+  return flipped;
+}
+
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
   const doubleKey = doubleColorkeyMainTextureIndices(map);
   return {
@@ -270,6 +281,12 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextu
     right: loadTextureSet(archive, map.rightTextures, SIDE_WALL_TRANSPARENT_INDICES),
     floor: loadTextureSet(archive, map.floorTextures),
     ceil: loadTextureSet(archive, map.ceilTextures),
+    // OBL_NUM/OBL2_NUM (decorative arch overlay) banks — verified against
+    // LES1W06B/C.PCX to reserve the same second colorkey index (0) as the
+    // ordinary side-wall bank (SIDE_WALL_TRANSPARENT_INDICES), not the
+    // niche/door-only double-key convention.
+    archLeft: loadTextureSet(archive, map.archLeftTextures, SIDE_WALL_TRANSPARENT_INDICES),
+    archRight: flipTextureSetHorizontally(loadTextureSet(archive, map.archRightTextures, SIDE_WALL_TRANSPARENT_INDICES)),
   };
 }
 

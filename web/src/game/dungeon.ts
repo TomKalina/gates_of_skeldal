@@ -1,4 +1,4 @@
-import { A_OPEN_CLOSE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
+import { A_OPEN_CLOSE, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -68,6 +68,13 @@ export interface ViewCell {
   // True when this front side's action is A_OPEN_CLOSE (a real, clickable
   // door in the source data) — see toggleDoor().
   frontIsDoor: boolean;
+  // draw_basic_sector's decorative arch overlay, drawn *before* the main
+  // wall texture (see dungeon-view.ts's drawFrontWall) — an independent
+  // index/gate per half (SD_LEFT_ARC/SD_RIGHT_ARC), each pulling from its
+  // own OBL_NUM/OBL2_NUM texture bank via archTextureIndex(). A side can
+  // show both halves, one, or neither, regardless of frontWallTexture.
+  frontArchLeftTexture: number | null;
+  frontArchRightTexture: number | null;
 }
 
 // VIEW3D_Z/VIEW3D_X in engine1.h.
@@ -111,6 +118,20 @@ function visibleSecTexture(side: ReturnType<typeof sideAt>): number | null {
   return side.sec + (side.secAnim >> 4);
 }
 
+// builder.c's GET_OBLOUK: `(p->oblouk & 0xf) + (p->prim_anim >> 4)` — the
+// arch overlay shares the same animation-frame offset as the primary wall
+// texture, so an animated door's arch frame advances in lockstep with its
+// swing. 0 means "no arch" regardless of the animation offset (verified:
+// sanitize_map clamps oblouk&0xf to the smaller of the two real banks'
+// entry counts, so an out-of-range index can't occur with real map data;
+// a missing/undefined texture lookup is handled the same as any other
+// bank's miss, no special-casing needed here).
+function archTextureIndex(side: ReturnType<typeof sideAt>): number | null {
+  if (!side) return null;
+  const index = (side.oblouk & 0xf) + (side.primAnim >> 4);
+  return index === 0 ? null : index;
+}
+
 // Mirrors create_minimap/crt_minimap_itr: a depth-and-lateral grid of every
 // sector visible from startSector while facing `facing`, built by
 // recursing forward through transparent front sides and sideways through
@@ -151,6 +172,8 @@ export function computeVisibleGrid(map: DungeonMap, startSector: number, facing:
       ceilTexture: sectorData.ceil,
       frontSecTexture: visibleSecTexture(frontSide),
       frontIsDoor: frontSide !== undefined && frontSide.action === A_OPEN_CLOSE,
+      frontArchLeftTexture: frontSide && frontSide.flags & SD_LEFT_ARC ? archTextureIndex(frontSide) : null,
+      frontArchRightTexture: frontSide && frontSide.flags & SD_RIGHT_ARC ? archTextureIndex(frontSide) : null,
     });
 
     if (isTransparent(frontSide)) {

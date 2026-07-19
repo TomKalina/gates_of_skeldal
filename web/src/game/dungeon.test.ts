@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, SD_PLAY_IMPS, SD_PRIM_VIS, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
+import { A_OPEN_CLOSE, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
 import { behind, canStep, computeVisibleGrid, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
@@ -43,6 +43,8 @@ function buildTestMap(): DungeonMap {
     rightTextures: [],
     ceilTextures: [],
     floorTextures: [],
+    archLeftTextures: [],
+    archRightTextures: [],
   };
 }
 
@@ -88,6 +90,39 @@ describe('computeViewCells', () => {
 
     const cells = computeViewCells(doorMap, 0, 1);
     expect(cells[0]).toMatchObject({ frontWallTexture: null, frontSecTexture: 9, frontIsDoor: true });
+  });
+
+  it('draws a decorative arch overlay only when SD_LEFT_ARC/SD_RIGHT_ARC is set, independent of frontWallTexture', () => {
+    // Verified against real LESPRED.MAP data: 623/1204 sides have a
+    // non-zero oblouk&0xf, but only 218 of those also carry SD_LEFT_ARC or
+    // SD_RIGHT_ARC — the rest are inert. Both halves can be gated
+    // independently (a side can draw one, both, or neither).
+    const map = buildTestMap();
+    const archOnLeftOnly: MapSide = { prim: 5, sec: 0, oblouk: 2, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_LEFT_ARC, primAnim: 0, secAnim: 0, action: 0 };
+    const withArc: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? archOnLeftOnly : s)) };
+
+    const cells = computeViewCells(withArc, 0, 1);
+    expect(cells[0]?.frontArchLeftTexture).toBe(2);
+    expect(cells[0]?.frontArchRightTexture).toBeNull();
+  });
+
+  it('an oblouk arch index with neither arc flag set draws no arch at all (the common, inert case)', () => {
+    const map = buildTestMap();
+    const inertArchIndex: MapSide = { prim: 5, sec: 0, oblouk: 1, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
+    const inertMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? inertArchIndex : s)) };
+
+    const cells = computeViewCells(inertMap, 0, 1);
+    expect(cells[0]?.frontArchLeftTexture).toBeNull();
+    expect(cells[0]?.frontArchRightTexture).toBeNull();
+  });
+
+  it('the arch index adds the same primAnim upper-nibble offset the main texture gets (GET_OBLOUK)', () => {
+    const map = buildTestMap();
+    const animatedArch: MapSide = { prim: 5, sec: 0, oblouk: 1, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_RIGHT_ARC, primAnim: 0x20, secAnim: 0, action: 0 };
+    const animatedMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? animatedArch : s)) };
+
+    const cells = computeViewCells(animatedMap, 0, 1);
+    expect(cells[0]?.frontArchRightTexture).toBe(1 + 2);
   });
 });
 

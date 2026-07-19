@@ -13,6 +13,11 @@ export interface DungeonTextureSet {
   right: ReadonlyMap<number, ImageData>;
   floor: ReadonlyMap<number, ImageData>;
   ceil: ReadonlyMap<number, ImageData>;
+  // OBL_NUM/OBL2_NUM decorative arch overlay banks (see dungeon.ts's
+  // archTextureIndex). archRight is pre-flipped horizontally at load time
+  // (main.ts) to match show_cel2's rev==2 mirrored-write behavior.
+  archLeft: ReadonlyMap<number, ImageData>;
+  archRight: ReadonlyMap<number, ImageData>;
 }
 
 // The real dungeon screen's chrome (TOPBAR.PCX, SIPKY.PCX) — all optional
@@ -321,6 +326,19 @@ export function runDungeonView(
   // behind it by the time this runs and shows through the gaps.
   function drawFrontWall(cell: ViewCell): void {
     const rect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
+    // draw_basic_sector draws the arch overlay(s) *before* the main/sec
+    // wall texture — a decorative frame painted behind whatever art
+    // (door, window, plain wall) sits in front of it, at the exact same
+    // cell rect (xofs=0, yofs=0, no SD_POSITION shift — the C source never
+    // applies plac to these two calls).
+    if (cell.frontArchLeftTexture !== null) {
+      const image = textures.archLeft.get(cell.frontArchLeftTexture);
+      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+    }
+    if (cell.frontArchRightTexture !== null) {
+      const image = textures.archRight.get(cell.frontArchRightTexture);
+      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+    }
     if (cell.frontWallTexture !== null) {
       const image = textures.main.get(cell.frontWallTexture);
       if (image) {

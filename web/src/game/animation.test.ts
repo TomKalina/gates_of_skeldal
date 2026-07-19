@@ -20,6 +20,8 @@ function singleSideMap(side: MapSide): DungeonMap {
     rightTextures: [],
     ceilTextures: [],
     floorTextures: [],
+    archLeftTextures: [],
+    archRightTextures: [],
   };
 }
 

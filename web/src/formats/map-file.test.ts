@@ -66,6 +66,8 @@ function buildMapBuffer(): ArrayBuffer {
     ),
     block(0x8003, nulSeparated(['WALL01.PCX', 'WALL02.PCX'])),
     block(0x8007, nulSeparated(['FLOOR01.PCX'])),
+    block(0x8008, nulSeparated(['ARCL01.PCX', 'ARCL02.PCX'])),
+    block(0x800b, nulSeparated(['ARCR01.PCX', 'ARCR02.PCX'])),
     block(0x8000, new Uint8Array(0)),
   ];
   const total = chunks.reduce((sum, c) => sum + c.length, 0);
@@ -88,6 +90,12 @@ describe('parseMapFile', () => {
     expect(map.sectors).toEqual([{ floor: 3, ceil: 4, sectorType: 1, stepNext: [0, 0, 0, 0] }]);
     expect(map.mainTextures).toEqual(['WALL01.PCX', 'WALL02.PCX']);
     expect(map.floorTextures).toEqual(['FLOOR01.PCX']);
+  });
+
+  it('parses A_STRARC/A_STRARC2 (0x8008/0x800b) as the arch-texture name lists', () => {
+    const map = parseMapFile(buildMapBuffer());
+    expect(map.archLeftTextures).toEqual(['ARCL01.PCX', 'ARCL02.PCX']);
+    expect(map.archRightTextures).toEqual(['ARCR01.PCX', 'ARCR02.PCX']);
   });
 
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
@@ -156,6 +164,8 @@ describe('toggleDoor', () => {
       rightTextures: [],
       ceilTextures: [],
       floorTextures: [],
+      archLeftTextures: [],
+      archRightTextures: [],
     };
   }
 
@@ -211,6 +221,8 @@ describe('toggleDoor', () => {
       rightTextures: [],
       ceilTextures: [],
       floorTextures: [],
+      archLeftTextures: [],
+      archRightTextures: [],
     };
 
     toggleDoor(map, 0, 1);

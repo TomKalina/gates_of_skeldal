@@ -17,7 +17,9 @@ const BLOCK_STR_LEFT = 0x8004;
 const BLOCK_STR_RIGHT = 0x8005;
 const BLOCK_STR_CEIL = 0x8006;
 const BLOCK_STR_FLOOR = 0x8007;
+const BLOCK_STR_ARC = 0x8008;
 const BLOCK_MAP_GLOB = 0x800a;
+const BLOCK_STR_ARC2 = 0x800b;
 const BLOCK_MAP_END = 0x8000;
 
 const TSTENA_SIZE = 16;
@@ -42,14 +44,24 @@ export const SD_SEC_FORV = 0x8000;
 // replays on the *opposite* side of the sector across it, keeping a
 // mirrored door pair in sync (open one face, the far face opens too).
 export const SD_APPLY_2ND = 0x400000;
+// draw_basic_sector's gate for drawing an arch-texture overlay on a side's
+// front wall (game/globals.h) — separate 32-bit flags bits, NOT part of
+// oblouk. Verified against real LESPRED.MAP data: 623/1204 sides have a
+// non-zero oblouk&0xf (arch index), but only 218 of those also carry one of
+// these flags — the other 405 have an inert, never-drawn index. Both bits
+// can be set independently (a side can draw both halves at once).
+export const SD_LEFT_ARC = 0x10000;
+export const SD_RIGHT_ARC = 0x20000;
 
 // `oblouk` (TSTENA byte offset 2, game/globals.h's struct tstena) packs
 // several unrelated sub-fields into one byte; builder.c reads them as
-// `oblouk & 0xf` (an arch-texture index), `oblouk & 0x10` (has this side got
-// a TVYKLENEK niche attached — `if (q->oblouk & 0x10) draw_vyklenek(...)`),
+// `oblouk & 0xf` (an arch-texture index, gated by SD_LEFT_ARC/SD_RIGHT_ARC
+// above — see GET_OBLOUK/draw_basic_sector), `oblouk & 0x10` (has this side
+// got a TVYKLENEK niche attached — `if (q->oblouk & 0x10) draw_vyklenek(...)`),
 // and `oblouk & SD_POSITION` (0x60, a 2-bit vertical-anchor selector for
 // show_cel2's `plac`). The niche bit isn't a named constant in the source;
-// SD_HAS_NICHE here is this port's own name for it.
+// SD_HAS_NICHE here is this port's own name for it (the C source calls it
+// SD_RECESS).
 export const SD_HAS_NICHE = 0x10;
 
 // realgame.c's do_action() action codes (TSTENA byte offset 15, `action`).
@@ -134,6 +146,13 @@ export interface DungeonMap {
   rightTextures: readonly string[];
   ceilTextures: readonly string[];
   floorTextures: readonly string[];
+  // OBL_NUM/OBL2_NUM banks (A_STRARC/A_STRARC2) — a side's decorative arch
+  // overlay, drawn before its main wall texture when SD_LEFT_ARC/
+  // SD_RIGHT_ARC is set (see dungeon.ts's archTextureIndex). Same
+  // NUL-separated-filename-list format as every other texture bank above,
+  // just gated by different flags/indices at render time.
+  archLeftTextures: readonly string[];
+  archRightTextures: readonly string[];
 }
 
 function readCString(bytes: Uint8Array, start: number, end: number): string {
@@ -224,6 +243,8 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
   let rightTextures: string[] = [];
   let ceilTextures: string[] = [];
   let floorTextures: string[] = [];
+  let archLeftTextures: string[] = [];
+  let archRightTextures: string[] = [];
 
   for (;;) {
     if (pos + TAG_LENGTH + 12 > bytes.length) break;
@@ -268,6 +289,12 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
       case BLOCK_STR_FLOOR:
         floorTextures = readNulSeparatedList(payload);
         break;
+      case BLOCK_STR_ARC:
+        archLeftTextures = readNulSeparatedList(payload);
+        break;
+      case BLOCK_STR_ARC2:
+        archRightTextures = readNulSeparatedList(payload);
+        break;
       default:
         break;
     }
@@ -286,6 +313,8 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
     rightTextures,
     ceilTextures,
     floorTextures,
+    archLeftTextures,
+    archRightTextures,
   };
 }
 

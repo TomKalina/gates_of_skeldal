@@ -18,6 +18,8 @@ function testMap(sideFlags: number): DungeonMap {
     rightTextures: [],
     ceilTextures: [],
     floorTextures: [],
+    archLeftTextures: [],
+    archRightTextures: [],
   };
 }
 

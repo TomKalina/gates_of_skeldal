@@ -123,3 +123,35 @@ export function flipImageDataVertically(image: ImageData): ImageData {
   }
   return new ImageData(flipped, width, height);
 }
+
+// show_cel2's rev==2 branch (game/engine1.c) draws the OBL2_NUM arch-texture
+// bank by walking the *screen* write position backward (`639-x`) while
+// still walking the *source* pixmap forward — verified against the real
+// mirror investigation into show_cel/show_cel2 this session (the engine
+// never reverses source pixel order anywhere; every mirror it does is a
+// destination-write-direction flip). A source image authored with its
+// content anchored at one edge (e.g. LES1W06B/C.PCX's tree trunk on the
+// canvas's left edge) ends up appearing on the *opposite* screen edge when
+// blitted this way. Baking an ordinary horizontal pixel-flip into the
+// loaded ImageData once, at load time, reproduces that same visible
+// result without replicating the DOS-era reversed-write-direction blit
+// technique itself — same "port the result, not the technique" approach
+// used for the vertical flip above and for perspective.ts's floor/ceiling
+// geometry.
+export function flipImageDataHorizontally(image: ImageData): ImageData {
+  const { width, height, data } = image;
+  const flipped = new Uint8ClampedArray(data.length);
+  const rowBytes = width * 4;
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * rowBytes;
+    for (let x = 0; x < width; x++) {
+      const src = rowStart + x * 4;
+      const dst = rowStart + (width - 1 - x) * 4;
+      flipped[dst] = data[src]!;
+      flipped[dst + 1] = data[src + 1]!;
+      flipped[dst + 2] = data[src + 2]!;
+      flipped[dst + 3] = data[src + 3]!;
+    }
+  }
+  return new ImageData(flipped, width, height);
+}
