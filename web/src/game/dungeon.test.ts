@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { A_OPEN_CLOSE, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
-import { behind, canStep, computeVisibleGrid, computeViewCells, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
+import { behind, canStep, computeVisibleGrid, computeViewCells, pendingTransition, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
   return { prim, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
@@ -47,6 +47,7 @@ function buildTestMap(): DungeonMap {
     archRightTextures: [],
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
+    mapTransitions: new Map(),
   };
 }
 
@@ -176,5 +177,23 @@ describe('movement', () => {
     const state = { map, sector: 1, direction: 1 as const };
     const back = stepBackward(state);
     expect(back.sector).toBe(0);
+  });
+
+  it('pendingTransition only fires on a blocked side that carries a map transition', () => {
+    const map: DungeonMap = {
+      ...buildTestMap(),
+      mapTransitions: new Map([
+        [1 * 4 + 1, { mapName: 'SKRETI.MAP', startSector: 12, startDirection: 3 }],
+        // An open side never fires one even if (hypothetically) tagged —
+        // real MA_LOADL data is always MC_PASSFAIL-gated (see map-file.ts),
+        // so this guards the "blocked" precondition itself, not just data
+        // presence.
+        [0 * 4 + 1, { mapName: 'SKRETI.MAP', startSector: 0, startDirection: 0 }],
+      ]),
+    };
+    expect(pendingTransition(map, 1, 1)).toEqual({ mapName: 'SKRETI.MAP', startSector: 12, startDirection: 3 });
+    // Same sector's other blocked walls carry no transition.
+    expect(pendingTransition(map, 1, 0)).toBeUndefined();
+    expect(pendingTransition(map, 0, 1)).toBeUndefined();
   });
 });

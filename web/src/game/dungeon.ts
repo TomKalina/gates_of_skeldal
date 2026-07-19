@@ -1,4 +1,4 @@
-import { A_OPEN_CLOSE, placedItemsAt, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap } from '../formats/map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap, type MapTransition } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -28,6 +28,16 @@ export function behind(dir: Direction): Direction {
 export function canStep(map: DungeonMap, sector: number, dir: Direction): boolean {
   const side = sideAt(map, sector, dir);
   return side !== undefined && (side.flags & SD_PLAY_IMPS) === 0;
+}
+
+// realgame.c's step_zoom(): `nopass=(map_sides[sid].flags & SD_PLAY_IMPS);
+// if (nopass) call_macro(sid,MC_PASSFAIL);` — an MA_LOADL macro gated on
+// MC_PASSFAIL only ever fires on a *blocked* side, so this only returns a
+// transition when canStep is already false; a passable side never carries
+// one (see map-file.ts's MC_PASSFAIL comment for the PASSSUC gap).
+export function pendingTransition(map: DungeonMap, sector: number, dir: Direction): MapTransition | undefined {
+  if (canStep(map, sector, dir)) return undefined;
+  return mapTransitionAt(map, sector, dir);
 }
 
 function stepThrough(state: DungeonState, dir: Direction): DungeonState {

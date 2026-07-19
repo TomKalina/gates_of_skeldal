@@ -22,7 +22,27 @@ const BLOCK_MAP_INFO = 0x8009;
 const BLOCK_MAP_GLOB = 0x800a;
 const BLOCK_STR_ARC2 = 0x800b;
 const BLOCK_MAP_ITEM = 0x800c;
+const BLOCK_MAP_MACR = 0x800d;
 const BLOCK_MAP_END = 0x8000;
+
+// game/macros.c's tma_gen bitfield: `action:6, cancel:1, once:1` packed into
+// byte 0, `flags:16` (the MC_* trigger mask this instruction responds to)
+// spanning bytes 1-2 LE. Other TMA_* structs alias the same 3 bytes as
+// plain `uint8_t action,flags,eflags` — "flags"/"eflags" there are just the
+// low/high byte of this same 16-bit field, not two separate ones.
+const MA_LOADL = 7;
+// game/globals.h: `#define MC_PASSFAIL 0x2`. Fires from realgame.c's
+// step_zoom() exactly when the side being stepped into is SD_PLAY_IMPS-
+// blocked (`nopass`) — real, load-bearing per game/realgame.c's
+// `if (nopass) call_macro(sid,MC_PASSFAIL); else call_macro(sid,MC_PASSSUC);`.
+// Every real MA_LOADL instruction found across this port's loadable maps
+// uses this trigger exclusively (an "invisible" map-edge transition: the
+// wall LOOKS solid but walking into it loads the neighboring map) — a
+// PASSSUC-gated map transition (fired on successfully walking through an
+// ordinary passable side) is a real, distinct case this port doesn't
+// support yet, since it needs hooking successful movement too, not just
+// blocked attempts.
+const MC_PASSFAIL = 0x2;
 
 const TSTENA_SIZE = 16;
 const TSECTOR_SIZE = 16;
@@ -181,6 +201,16 @@ export interface DungeonMap {
   // as `sides`) — see placedItemsAt(), dungeon.ts's ViewCell.floorItems, and
   // game/builder.c's draw_placed_items_normal.
   placedItems: ReadonlyMap<number, readonly number[]>;
+  // A_MAPMACR's MA_LOADL/MC_PASSFAIL instructions only (this port doesn't
+  // interpret the general ~40-opcode macro VM — see mapTransitionAt() and
+  // dungeon.ts's pendingTransition()), keyed by sector*4+direction.
+  mapTransitions: ReadonlyMap<number, MapTransition>;
+}
+
+export interface MapTransition {
+  mapName: string;
+  startSector: number;
+  startDirection: number;
 }
 
 function readCString(bytes: Uint8Array, start: number, end: number): string {
@@ -261,6 +291,43 @@ function parsePlacedItems(bytes: Uint8Array, view: DataView): Map<number, number
   return piles;
 }
 
+// A_MAPMACR (game/macros.c: load_macros): repeating {int32 combinedIdx
+// (=sector*4+direction, 0 terminates the block); repeating {int32
+// instrSize; instrSize bytes of instruction data}, terminated by int32 0}.
+// Each instruction's own byte 0 is its opcode (game/macros.c's `action:6`
+// bitfield, matching the small MA_* range 0..39) — the file format is
+// self-describing (length-prefixed), so instructions this port doesn't
+// interpret can simply be skipped by their declared size without knowing
+// their payload struct at all. Only MA_LOADL (map transition) instructions
+// gated by MC_PASSFAIL are extracted; every other opcode (dialogue, item
+// creation, conditional jumps, ~37 more — game/macros.c's call_macro switch)
+// is real map-scripting data this port doesn't run yet (that's the general
+// macro VM, EXECUTION-PLAN.md's A2b, a separate multi-session effort).
+function parseMapTransitions(bytes: Uint8Array, view: DataView): Map<number, MapTransition> {
+  const transitions = new Map<number, MapTransition>();
+  let pos = 0;
+  while (pos < bytes.length) {
+    const combined = view.getInt32(pos, true);
+    pos += 4;
+    if (combined === 0) break;
+    for (;;) {
+      const len = view.getInt32(pos, true);
+      pos += 4;
+      if (len === 0) break;
+      const action = bytes[pos]! & 0x3f;
+      const flags = view.getUint16(pos + 1, true);
+      if (action === MA_LOADL && (flags & MC_PASSFAIL) !== 0) {
+        const startSector = view.getInt16(pos + 3, true);
+        const startDirection = bytes[pos + 5]!;
+        const mapName = readCString(bytes, pos + 6, pos + len).toUpperCase();
+        transitions.set(combined, { mapName, startSector, startDirection });
+      }
+      pos += len;
+    }
+  }
+  return transitions;
+}
+
 function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
   const count = Math.floor(bytes.length / TSTENA_SIZE);
   const sides: MapSide[] = [];
@@ -321,6 +388,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
   let archLeftTextures: string[] = [];
   let archRightTextures: string[] = [];
   let placedItems = new Map<number, number[]>();
+  let mapTransitions = new Map<number, MapTransition>();
 
   for (;;) {
     if (pos + TAG_LENGTH + 12 > bytes.length) break;
@@ -378,6 +446,9 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
       case BLOCK_MAP_ITEM:
         placedItems = parsePlacedItems(payload, payloadView);
         break;
+      case BLOCK_MAP_MACR:
+        mapTransitions = parseMapTransitions(payload, payloadView);
+        break;
       default:
         break;
     }
@@ -407,6 +478,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
     archLeftTextures,
     archRightTextures,
     placedItems,
+    mapTransitions,
   };
 }
 
@@ -416,4 +488,8 @@ export function sideAt(map: DungeonMap, sector: number, direction: number): MapS
 
 export function placedItemsAt(map: DungeonMap, sector: number, direction: number): readonly number[] {
   return map.placedItems.get(sector * 4 + direction) ?? [];
+}
+
+export function mapTransitionAt(map: DungeonMap, sector: number, direction: number): MapTransition | undefined {
+  return map.mapTransitions.get(sector * 4 + direction);
 }

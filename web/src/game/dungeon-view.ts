@@ -1,5 +1,5 @@
-import { computeVisibleGrid, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
-import { toggleDoor } from '../formats/map-file';
+import { behind, computeVisibleGrid, pendingTransition, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import { toggleDoor, type DungeonMap } from '../formats/map-file';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
@@ -168,15 +168,24 @@ const PARTY_ROW_X = 24;
 // Save/load (ULOŽ/OBNOV) is a single implicit localStorage slot holding
 // just the current sector/direction — there's no save-slot picker UI, and
 // no inventory/combat state exists yet to persist beyond position.
+// realgame.c's step_zoom() firing an MA_LOADL/MC_PASSFAIL macro (see
+// dungeon.ts's pendingTransition): fetch/parse/texture-load the target map
+// and hand it back, or null if that failed (e.g. the map file 404s) — the
+// view then just stays put, same graceful-degradation convention as every
+// other missing-asset case in this port.
+export type MapLoader = (mapName: string) => Promise<{ map: DungeonMap; textures: DungeonTextureSet } | null>;
+
 export function runDungeonView(
   ctx: CanvasRenderingContext2D,
   initial: DungeonState,
-  textures: DungeonTextureSet,
+  initialTextures: DungeonTextureSet,
   party: readonly Character[],
   chrome: DungeonChromeAssets = {},
+  loadMap: MapLoader = () => Promise.resolve(null),
 ): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
+  let textures = initialTextures;
   let hoverDpad: DpadDirection | null = null;
   let statusText = '';
   // Cached from the last draw() for click hit-testing — doors are the only
@@ -665,14 +674,40 @@ export function runDungeonView(
     }
   }
 
+  // realgame.c's game_big_circle(): once a map transition macro fires, the
+  // whole map/textures are swapped for the target one, entering at its own
+  // start sector/direction — this port's equivalent of load_map() being
+  // called again from the outer game loop. Async because it's a real
+  // fetch+parse+texture-decode, unlike ordinary in-map movement.
+  async function performTransition(transition: { mapName: string; startSector: number; startDirection: number }): Promise<void> {
+    const loaded = await loadMap(transition.mapName);
+    if (!loaded) return;
+    state = { map: loaded.map, sector: transition.startSector, direction: transition.startDirection as DungeonState['direction'] };
+    textures = loaded.textures;
+    lastDoorCells = [];
+    statusText = '';
+    draw();
+  }
+
+  function attemptStep(dir: DungeonState['direction'], step: (s: DungeonState) => DungeonState): void {
+    const transition = pendingTransition(state.map, state.sector, dir);
+    if (transition) {
+      void performTransition(transition);
+      return;
+    }
+    state = step(state);
+    statusText = '';
+    draw();
+  }
+
   function onKeydown(e: KeyboardEvent): void {
     switch (e.code) {
       case 'ArrowUp':
-        state = stepForward(state);
-        break;
+        attemptStep(state.direction, stepForward);
+        return;
       case 'ArrowDown':
-        state = stepBackward(state);
-        break;
+        attemptStep(behind(state.direction), stepBackward);
+        return;
       case 'ArrowLeft':
         state = { ...state, direction: turnLeft(state.direction) };
         break;

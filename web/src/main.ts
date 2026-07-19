@@ -2,7 +2,7 @@ import { createScreenCanvas } from './platform/canvas-context';
 import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
 import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
-import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet } from './game/dungeon-view';
+import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
 import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
@@ -381,6 +381,17 @@ async function enterDungeon(
   const itemsBuffer = await tryAutoLoadMap('ITEMS.DAT');
   const itemAppearance = itemsBuffer ? parseItemsFile(itemsBuffer).itemAppearance : [];
 
+  // MA_LOADL/MC_PASSFAIL map transitions (dungeon.ts's pendingTransition):
+  // ITEMS.DAT is a single global catalog shared by every map (loaded once
+  // by the real inv.c's load_items(), not per-map), so itemAppearance is
+  // captured once here and reused for every subsequent map fetched.
+  const loadMap: MapLoader = async (mapName) => {
+    const buffer = await tryAutoLoadMap(mapName);
+    if (!buffer) return null;
+    const nextMap = parseMapFile(buffer);
+    return { map: nextMap, textures: loadDungeonTextures(archive, nextMap, itemAppearance) };
+  };
+
   const map = parseMapFile(mapBuffer);
   const textures = loadDungeonTextures(archive, map, itemAppearance);
   const { result } = runDungeonView(
@@ -389,6 +400,7 @@ async function enterDungeon(
     textures,
     party,
     chrome,
+    loadMap,
   );
   await result; // resolves when KONEC is clicked
   return true;

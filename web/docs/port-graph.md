@@ -832,6 +832,98 @@ parity vs C build where applicable). Updated as issues close.
       item 52, "Bandalír") renders floor-anchored at the predicted
       position/scale with depth shading applied, and confirmed the start
       room (table/candle scene) shows no regression; 0 console errors.
+  - **Phase D3 — map switching (`MA_LOADL`/`MC_PASSFAIL`)** (2026-07-19).
+    Directly answers a standing question from earlier in this port's
+    history ("why can't I enter the goblin cave?" — `SKRETI.MAP` is one of
+    this feature's real transition targets). Investigated by searching for
+    an `A_CHANGE_MAP`-style action first (the execution plan's original
+    assumption) — none exists. `load_map()`'s only 3 call sites are the
+    debug console, and `skeldal.c`'s `game_big_circle()` outer loop, which
+    reads a global `loadlevel` struct (target map name/sector/direction)
+    that's set from exactly two places: `kouzla.c`'s teleport spell, and
+    `macros.c`'s `macro_load_another_map()` — a single opcode (`MA_LOADL`,
+    value 7) of the ~40-opcode `A_MAPMACR` map-scripting VM (`game/
+    macros.c`, this port's still-unported A2b). Rather than build that
+    whole VM, ported only what `MA_LOADL` needs, since the file's own
+    instruction container is length-prefixed and self-describing —
+    instructions this port doesn't interpret can be skipped by their
+    declared byte size alone, with no need to know their payload struct.
+    - Confirmed the trigger via `game/realgame.c`'s `step_zoom()`: `nopass
+      = (side.flags & SD_PLAY_IMPS); if (nopass) call_macro(sid,
+      MC_PASSFAIL); else call_macro(sid,MC_PASSSUC);` — i.e. these are
+      "invisible" map-edge transitions: the wall reads as a normal solid
+      obstacle (`SD_PLAY_IMPS` set, same flag `canStep`/`pendingTransition`
+      already check), and walking into it *fires the macro anyway*, even
+      though ordinary movement fails. Parsed every block of the real
+      `LESPRED.MAP` directly to confirm: exactly 8 `MA_LOADL` instructions
+      exist, every single one gated on `MC_PASSFAIL` (none on `MC_PASSSUC`
+      — a passable-side transition is a real, distinct case, not supported
+      yet, since it would need hooking *successful* movement too, not just
+      blocked attempts — see map-file.ts's own `MC_PASSFAIL` comment).
+      Targets: `SKRETI.MAP` (×2), `PLANE.MAP` (×2), `CAREDBAR.MAP` (×2),
+      `SOUTESKA.MAP`, `P_LESY_1.MAP` — all 5 confirmed present in the real
+      game data.
+    - `TMA_LOADLEV`'s on-disk layout (verified against real bytes, not
+      assumed from the C struct's own padded in-memory layout): byte
+      0=action (a `action:6,cancel:1,once:1` bitfield — `game/macros.c`'s
+      `tma_gen`; every other `TMA_*` struct's plain `uint8_t action,flags,
+      eflags` fields alias the *same* 3 bytes as tma_gen's packed
+      `action`+16-bit `flags`, they're not a genuinely separate third
+      byte), bytes 1-2=flags (u16 LE, the `MC_*` trigger mask), bytes
+      3-4=start_pos (i16 LE), byte 5=dir, remaining bytes=NUL-terminated
+      map name. `read_macro_item`'s "fixpad" 1-byte-shift copy (for
+      `MA_LOADL` and ~20 other opcodes) exists purely to correct C struct
+      alignment padding in the *in-memory* array — irrelevant here, since
+      this parser reads fields at their real on-disk offsets directly and
+      never builds an equivalent padded struct.
+    - Ported: `map-file.ts`'s `parseMapTransitions` (new `BLOCK_MAP_MACR`
+      case, `0x800d`) → `DungeonMap.mapTransitions`/`mapTransitionAt()`,
+      same `sector*4+direction` indexing as `sides`/`placedItems`.
+      `dungeon.ts`'s `pendingTransition(map,sector,dir)`: returns a
+      transition only when `canStep` is already false, mirroring
+      `nopass`'s exact gating. `dungeon-view.ts`: `runDungeonView` takes a
+      new optional `MapLoader` callback (defaults to a no-op resolving
+      `null`, same graceful-degradation convention as a missing chrome
+      asset); `attemptStep()` checks `pendingTransition` before an
+      ArrowUp/ArrowDown move and, if one fires, awaits `loadMap()` and
+      swaps the running view's `state`/`textures` in place instead of
+      calling `stepForward`/`stepBackward` — mirroring `game_big_circle`'s
+      outer loop re-calling `load_map()` with a new `loadlevel`.
+      `state`/`textures` were both promoted from the function's `initial`/
+      `textures` params to reassignable `let`s for this. `main.ts` wires
+      the real callback: `ITEMS.DAT` (a single global item catalog, loaded
+      once, not per-map) is captured once and reused for every subsequent
+      map fetched, matching the real engine's own one-time `load_items()`.
+      `vite.config.ts`'s dev allowlist grew the 5 real target filenames.
+    - **Known, deliberate gaps**: only `MA_LOADL` is interpreted; every
+      other opcode in a macro list sharing that (sector,direction) slot —
+      dialogue, item creation, conditional jumps, ~37 more — is silently
+      skipped, not executed (real map-scripting content, out of scope
+      until A2b). `MC_PASSSUC`-gated transitions (walking through an
+      *open* passage) aren't hooked. The destination map's own start
+      sector is trusted as-is — no A2b `MC_STARTLEV`/`MC_INCOMING` macros
+      fire on arrival, matching this port's existing "no macro VM yet"
+      scope everywhere else.
+    - Verified live (Playwright): real per-map colorkey/orientation lists
+      in `main.ts` (`VERTICALLY_FLIPPED_TEXTURES` etc.) are LESPRED.MAP-
+      specific and were already flagged, before this session, as "known-
+      incomplete for other maps... once D3 makes them reachable" — exactly
+      what happened: `SKRETI.MAP` loads and renders (distinct geometry,
+      distinct stone-cave textures, no console errors), but shows an
+      unpunched blue colorkey bleed around one sprite (a curtain/tapestry),
+      confirming that prediction rather than indicating a bug in the
+      transition mechanism itself. Fixing per-map colorkey/orientation for
+      newly-reachable maps is real follow-up work, deliberately not
+      attempted in this pass (scope: make the transition itself work, not
+      re-run the whole texture-QA pass this session already did for
+      LESPRED.MAP against every other map). Reaching a real, distant,
+      normally door-gated sector (50) for this test used the existing
+      ULOŽ/OBNOV save mechanism (`localStorage`) to patch the saved
+      sector/direction directly rather than walking the real path, since a
+      static reachability BFS over raw `SD_PLAY_IMPS` data only covers ~24
+      states from the start sector — most of the map sits behind
+      interactive doors a static analysis can't open, not a bug in this
+      feature.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -845,7 +937,7 @@ parity vs C build where applicable). Updated as issues close.
 | `inv.c` | items, inventory, stats, shops | `src/game/items.ts` | pending (floor-item rendering split out already — see `draw_placed_items_normal`/Phase D1 note below; inventory UI/equip/shops still pending) |
 | `dialogy.c` | dialog bytecode interpreter + UI | `src/game/dialogs.ts` | pending |
 | `gamesave.c` | save/load archive | `src/game/savegame.ts` | pending |
-| `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending |
+| `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending (one opcode, `MA_LOADL`/map transitions, split out early — see `formats/map-file.ts`'s `parseMapTransitions`/Phase D3 note; the general ~40-opcode VM is still unported) |
 | `specproc.c` | hardcoded special map procedures | `src/game/specproc.ts` | pending |
 | `engine1.c` | pseudo-3D zoom renderer | `src/game/dungeon-view.ts` (simplified — see note below) | in-progress, see note below |
 | `engine2.c` | blitters (walls, floors, sprites, anims) | `src/game/dungeon-view.ts` (simplified — see note below) | in-progress, see note below |

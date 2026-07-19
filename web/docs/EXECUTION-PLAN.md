@@ -338,8 +338,13 @@ produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
   (2026-07-19); `A_MAPVYK`/`draw_vyklenek` (niche items) still pending, see
   port-graph.md's Phase D1 entry for the exact split and why.
 - **D2. Inventory screen** (`game/inv.c`) on the C-phase toolkit.
-- **D3. Map switching**: `A_CHANGE_MAP`-family actions + `GLOBMAP.DAT`
-  (`game/globmap.c`) — walking between all 22 maps.
+- **D3. Map switching** — **done for the in-world MA_LOADL/MC_PASSFAIL
+  wall-transition case** (2026-07-19; see port-graph.md's Phase D3 entry).
+  There's no separate `A_CHANGE_MAP` action family — map switches turn out
+  to be one opcode (`MA_LOADL`) of `game/macros.c`'s ~40-opcode map-script
+  VM (A2b, still unported in general). `GLOBMAP.DAT` (`game/globmap.c`,
+  the overworld fast-travel screen) is a distinct, separate feature — still
+  pending.
 - **D4. Text decode**: `.ENC` level texts + Kamenický encoding
   (`libs/cztable.c`) — unblocks `A_DISPLAY_TEXT`, dialogs later.
 

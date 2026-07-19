@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, parseMapFile, placedItemsAt, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -65,6 +65,41 @@ function placedItemsPayload(entries: { sector: number; direction: number; items:
     view.setInt16(4 + items.length * 2, 0, true);
     parts.push(...buf);
   }
+  return parts;
+}
+
+// game/macros.c's tma_loadlev on-disk layout: byte0=action(MA_LOADL=7,
+// cancel/once both 0), bytes1-2=flags (u16 LE, the MC_* trigger mask),
+// bytes3-4=start_pos (i16 LE), byte5=dir, then a NUL-terminated map name.
+function loadlevInstruction(flags: number, startSector: number, startDirection: number, mapName: string): Uint8Array {
+  const nameBytes = new TextEncoder().encode(mapName);
+  const payload = new Uint8Array(6 + nameBytes.length + 1);
+  const view = new DataView(payload.buffer);
+  payload[0] = 7; // MA_LOADL
+  view.setUint16(1, flags, true);
+  view.setInt16(3, startSector, true);
+  payload[5] = startDirection;
+  payload.set(nameBytes, 6);
+  return payload;
+}
+
+// A_MAPMACR: repeating {int32 combinedIdx; repeating {int32 instrSize;
+// instrSize bytes}, terminated by int32 0}, terminated by an int32 0
+// combinedIdx.
+function macroBlockPayload(entries: { sector: number; direction: number; instructions: Uint8Array[] }[]): number[] {
+  const parts: number[] = [];
+  for (const { sector, direction, instructions } of entries) {
+    const idx = new Uint8Array(4);
+    new DataView(idx.buffer).setInt32(0, sector * 4 + direction, true);
+    parts.push(...idx);
+    for (const instr of instructions) {
+      const len = new Uint8Array(4);
+      new DataView(len.buffer).setInt32(0, instr.length, true);
+      parts.push(...len, ...instr);
+    }
+    parts.push(0, 0, 0, 0);
+  }
+  parts.push(0, 0, 0, 0);
   return parts;
 }
 
@@ -166,6 +201,41 @@ describe('parseMapFile', () => {
     expect(placedItemsAt(map, 0, 1)).toEqual([]);
   });
 
+  it('parses A_MAPMACR (0x800d) MA_LOADL/MC_PASSFAIL instructions as map transitions, skipping other opcodes and other triggers', () => {
+    const MC_PASSFAIL = 0x2;
+    const MC_INCOMING = 0x40;
+    const buffer = new Uint8Array([
+      ...block(0x800a, mapGlobalPayload(0, 0, 'Test Map')),
+      ...block(0x8002, sectorPayload(1, 1, [0, 0, 0, 0])),
+      ...block(
+        0x800d,
+        new Uint8Array(
+          macroBlockPayload([
+            {
+              sector: 5,
+              direction: 1,
+              instructions: [
+                new Uint8Array([1, 0, 0]), // some other opcode (MA_SOUND=1) — must be skipped, not misread
+                loadlevInstruction(MC_PASSFAIL, 12, 3, 'skreti.map'),
+              ],
+            },
+            {
+              sector: 6,
+              direction: 0,
+              // MA_LOADL present but gated on a different trigger — not a
+              // wall-bump transition, so it's not extracted.
+              instructions: [loadlevInstruction(MC_INCOMING, 0, 0, 'plane.map')],
+            },
+          ]),
+        ),
+      ),
+      ...block(0x8000, new Uint8Array(0)),
+    ]).buffer;
+    const map = parseMapFile(buffer);
+    expect(mapTransitionAt(map, 5, 1)).toEqual({ mapName: 'SKRETI.MAP', startSector: 12, startDirection: 3 });
+    expect(mapTransitionAt(map, 6, 0)).toBeUndefined();
+  });
+
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
     expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
@@ -236,6 +306,7 @@ describe('toggleDoor', () => {
       archRightTextures: [],
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
+    mapTransitions: new Map(),
     };
   }
 
@@ -295,6 +366,7 @@ describe('toggleDoor', () => {
       archRightTextures: [],
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
+    mapTransitions: new Map(),
     };
 
     toggleDoor(map, 0, 1);
