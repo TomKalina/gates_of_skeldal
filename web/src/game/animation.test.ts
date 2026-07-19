@@ -13,7 +13,7 @@ function singleSideMap(side: MapSide): DungeonMap {
     mapName: 'Test',
     startSector: 0,
     startDirection: 0,
-    sectors: [{ floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0] }],
+    sectors: [{ floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0], shaded: false }],
     sides: [side, side, side, side],
     mainTextures: [],
     leftTextures: [],
@@ -22,6 +22,7 @@ function singleSideMap(side: MapSide): DungeonMap {
     floorTextures: [],
     archLeftTextures: [],
     archRightTextures: [],
+    fadeColor: { r: 0, g: 0, b: 0 },
   };
 }
 

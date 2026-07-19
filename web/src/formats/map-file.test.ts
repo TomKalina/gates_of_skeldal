@@ -19,12 +19,24 @@ function nulSeparated(names: string[]): Uint8Array {
   return new Uint8Array(parts);
 }
 
-function mapGlobalPayload(startSector: number, direction: number, mapName: string): Uint8Array {
+function mapGlobalPayload(startSector: number, direction: number, mapName: string, fade: [number, number, number] = [0, 0, 0]): Uint8Array {
   const payload = new Uint8Array(104);
   const view = new DataView(payload.buffer);
+  view.setInt32(52, fade[0], true);
+  view.setInt32(56, fade[1], true);
+  view.setInt32(60, fade[2], true);
   view.setInt32(64, startSector, true);
   view.setInt32(68, direction, true);
   new TextEncoder().encodeInto(mapName, payload.subarray(72, 102));
+  return payload;
+}
+
+// TMAP_EDIT_INFO: short x,y,layer,flags — only `flags` (offset 6) matters
+// for MC_SHADING; x/y/layer are level-editor-only data.
+function mapInfoPayload(flagsPerSector: number[]): Uint8Array {
+  const payload = new Uint8Array(flagsPerSector.length * 8);
+  const view = new DataView(payload.buffer);
+  flagsPerSector.forEach((flags, i) => view.setInt16(i * 8 + 6, flags, true));
   return payload;
 }
 
@@ -87,7 +99,7 @@ describe('parseMapFile', () => {
     expect(map.mapName).toBe('Test Map');
     expect(map.startSector).toBe(0);
     expect(map.startDirection).toBe(2);
-    expect(map.sectors).toEqual([{ floor: 3, ceil: 4, sectorType: 1, stepNext: [0, 0, 0, 0] }]);
+    expect(map.sectors).toEqual([{ floor: 3, ceil: 4, sectorType: 1, stepNext: [0, 0, 0, 0], shaded: false }]);
     expect(map.mainTextures).toEqual(['WALL01.PCX', 'WALL02.PCX']);
     expect(map.floorTextures).toEqual(['FLOOR01.PCX']);
   });
@@ -96,6 +108,35 @@ describe('parseMapFile', () => {
     const map = parseMapFile(buildMapBuffer());
     expect(map.archLeftTextures).toEqual(['ARCL01.PCX', 'ARCL02.PCX']);
     expect(map.archRightTextures).toEqual(['ARCR01.PCX', 'ARCR02.PCX']);
+  });
+
+  it('parses A_MAPGLOB fade_r/g/b as the per-map depth-shade color', () => {
+    const buffer = new Uint8Array([
+      ...block(0x800a, mapGlobalPayload(0, 2, 'Test Map', [166, 234, 228])),
+      ...block(0x8002, sectorPayload(3, 4, [0, 0, 0, 0])),
+      ...block(0x8000, new Uint8Array(0)),
+    ]).buffer;
+    const map = parseMapFile(buffer);
+    expect(map.fadeColor).toEqual({ r: 166, g: 234, b: 228 });
+  });
+
+  it('parses A_MAPINFO (0x8009) as each sector\'s MC_SHADING (0x100) override, regardless of block order', () => {
+    const MC_SHADING = 0x100;
+    // A_MAPINFO placed *before* A_SECTOR_MAP here — the two are merged by
+    // index only after the whole block stream is read, so this must not
+    // depend on which one appears first in the file.
+    const buffer = new Uint8Array([
+      ...block(0x800a, mapGlobalPayload(0, 0, 'Test Map')),
+      ...block(0x8009, mapInfoPayload([0, MC_SHADING])),
+      ...block(
+        0x8002,
+        new Uint8Array([...sectorPayload(1, 1, [0, 0, 0, 0]), ...sectorPayload(1, 1, [0, 0, 0, 0])]),
+      ),
+      ...block(0x8000, new Uint8Array(0)),
+    ]).buffer;
+    const map = parseMapFile(buffer);
+    expect(map.sectors[0]?.shaded).toBe(false);
+    expect(map.sectors[1]?.shaded).toBe(true);
   });
 
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
@@ -157,7 +198,7 @@ describe('toggleDoor', () => {
       mapName: 'Test',
       startSector: 0,
       startDirection: 0,
-      sectors: [{ floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0] }],
+      sectors: [{ floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0], shaded: false }],
       sides: [blankSide(), door(flags), blankSide(), blankSide()],
       mainTextures: [],
       leftTextures: [],
@@ -166,6 +207,7 @@ describe('toggleDoor', () => {
       floorTextures: [],
       archLeftTextures: [],
       archRightTextures: [],
+    fadeColor: { r: 0, g: 0, b: 0 },
     };
   }
 
@@ -209,8 +251,8 @@ describe('toggleDoor', () => {
       startSector: 0,
       startDirection: 0,
       sectors: [
-        { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 1, 0, 0] }, // east -> sector 1
-        { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0] }, // west -> sector 0
+        { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 1, 0, 0], shaded: false }, // east -> sector 1
+        { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 0, 0, 0], shaded: false }, // west -> sector 0
       ],
       sides: [
         blankSide(), door(SD_PLAY_IMPS | SD_APPLY_2ND), blankSide(), blankSide(), // sector 0
@@ -223,6 +265,7 @@ describe('toggleDoor', () => {
       floorTextures: [],
       archLeftTextures: [],
       archRightTextures: [],
+    fadeColor: { r: 0, g: 0, b: 0 },
     };
 
     toggleDoor(map, 0, 1);

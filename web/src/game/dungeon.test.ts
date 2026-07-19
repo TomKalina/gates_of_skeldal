@@ -34,8 +34,8 @@ function buildTestMap(): DungeonMap {
     startSector: 0,
     startDirection: 1,
     sectors: [
-      { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 1, 0, 0] },
-      { floor: 1, ceil: 1, sectorType: 1, stepNext: [1, 1, 1, 0] },
+      { floor: 1, ceil: 1, sectorType: 1, stepNext: [0, 1, 0, 0], shaded: false },
+      { floor: 1, ceil: 1, sectorType: 1, stepNext: [1, 1, 1, 0], shaded: false },
     ],
     sides,
     mainTextures: [],
@@ -45,6 +45,7 @@ function buildTestMap(): DungeonMap {
     floorTextures: [],
     archLeftTextures: [],
     archRightTextures: [],
+    fadeColor: { r: 0, g: 0, b: 0 },
   };
 }
 
@@ -141,6 +142,7 @@ describe('computeVisibleGrid', () => {
         ceil: 1,
         sectorType: 1,
         stepNext: [0, 0, 0, 0],
+        shaded: false,
       }),
       // sector 0's north side, now open (transparent) and leading sideways to sector 2
       sides: map.sides.map((s, i) => (i === 0 ? open() : s)).concat(wall(20), wall(21), wall(22), wall(23)),

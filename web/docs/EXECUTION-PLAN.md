@@ -219,8 +219,42 @@ build via Playwright; pixel-diff in CI (assets stay local/gitignored).
 scripted walk of LESPRED.MAP.
 
 ### B3. Remaining side features
-`SD_SHIFTUP` secondary-wall raising, `SD_SPEC`, distance shading
-(`SHADE_PAL` tables, `secnd_shade`, `MC_SHADING`).
+`SD_SHIFTUP` secondary-wall raising, `SD_SPEC` — checked against real
+LESPRED.MAP data before considering: `SD_SHIFTUP`'s gate (`side_tag`,
+TSTENA offset 3) is 0/1204, and its companion `xsec`/`ysec` fields
+(offsets 6/7) show a constant baseline value (125, 80) across every
+sampled side rather than meaningful per-side variance — genuinely inert
+in this map's real data, not worth building against synthetic fixtures
+only. `SD_SPEC` is 3/1204 (likely trigger/macro-related, A2b territory).
+Both correctly deferred until another map's data makes them verifiable.
+
+- **Distance shading (`SHADE_PAL`/`secnd_shade`/`MC_SHADING`) — DONE**
+  (2026-07-19). A real, always-on effect: every wall/door/arch texture
+  (`A_STRMAIN/LEFT/RIGHT/ARC/ARC2`) is unconditionally loaded via
+  `A_FADE_PAL` in the real engine (`game/skeldal.c`'s `pcx_fade_decomp`),
+  which bakes 5 depth-indexed palette variants into it — fading toward a
+  per-map ambient/fog color (`A_MAPGLOB`'s `fade_r/g/b`, now `map-file.ts`'s
+  `DungeonMap.fadeColor`) as depth increases, or straight to black for
+  `MC_SHADING`-flagged sectors (`A_MAPINFO`, now `MapSector.shaded` — a
+  real per-sector override, up to 29% of sectors in some shipped maps,
+  confirmed by scanning every shipped map's raw block data, not assumed).
+  `SHADE_STEPS=5` matches `VIEW3D_Z`(5) exactly — one flat shade bucket per
+  depth level, not a continuous gradient (confirmed by deriving the exact
+  blend ratio from `palette_shadow`'s formula: alpha = `3*depth/14` for the
+  fade-to-map-color case, `depth/5` for fade-to-black). Ported as a
+  Canvas2D alpha-overlay rect (`dungeon-view.ts`'s `applyDepthShade`)
+  applied once per cell after all its layers (arch+main+sec, or the side-
+  wall image) are drawn — mathematically identical to shading each layer
+  independently before compositing (same alpha/target color per layer at a
+  given depth is exactly distributive over alpha-over composition, not an
+  approximation). Floor/ceiling correctly excluded — real source confirms
+  they use a wholly different mechanism (`pcx_15bit_autofade`/`A_16BIT`).
+  Verified live: forest scene shows a dramatic, clearly graduated fade
+  from full-color near trunks to the pale forest-cyan horizon; the start
+  room's near window (depth 0) stays completely untinted while a farther
+  receding side-wall panel (deeper cell) shows one flat, depth-appropriate
+  wash — confirms the "stepped, not gradient" behavior is working
+  correctly, not over- or under-applied.
 
 - **`oblouk & 0xf` arch textures — DONE** (2026-07-19). Ported
   `A_STRARC`/`A_STRARC2` block parsing (`map-file.ts`'s `archLeftTextures`/

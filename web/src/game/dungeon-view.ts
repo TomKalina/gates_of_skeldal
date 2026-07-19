@@ -276,7 +276,40 @@ export function runDungeonView(
     ctx.restore();
   }
 
-  function drawSideWall(near: Rect, far: Rect, side: 'left' | 'right', image: ImageData | undefined): void {
+  // Every wall/door/arch texture bank (MAIN_NUM/LEFT_NUM/RIGHT_NUM/OBL_NUM/
+  // OBL2_NUM) is loaded via A_FADE_PAL in the real engine (game/skeldal.c's
+  // pcx_fade_decomp), which bakes 5 depth-indexed palette variants into
+  // every texture at load time — a per-map ambient/fog color the wall
+  // fades toward as depth increases (real, per-map-authored art direction,
+  // e.g. LESPRED.MAP's pale forest-cyan-green vs. dungeon maps' black —
+  // see DungeonMap.fadeColor), or, for MC_SHADING-flagged sectors (a real,
+  // per-sector override — up to 29% of sectors in some shipped maps),
+  // straight fade-to-black instead. Floor/ceiling are excluded — they use
+  // a wholly different, palette-shadow-unrelated mechanism.
+  //
+  // Ratios below are derived directly from palette_shadow's blend formula
+  // (libs/pcx.c) at SHADE_STEPS=5, which is exactly VIEW3D_Z (5 depth
+  // levels, one bucket per level, no interpolation): fraction of original
+  // color retained at depth d is (14-3d)/14 for the fade-to-map-color half,
+  // (5-d)/5 for the fade-to-black half — so alpha (fraction of the *target*
+  // color mixed in) is 3d/14 or d/5 respectively. Applying this as ONE flat
+  // overlay after every layer (arch+main+sec, or the side-wall image) has
+  // been drawn onto a cell's rect is mathematically identical to shading
+  // each texture independently before compositing them (same alpha/target
+  // for every layer at a given depth — alpha-over composition distributes
+  // over blending), not merely a visual approximation.
+  function applyDepthShade(cell: ViewCell, x: number, y: number, width: number, height: number): void {
+    const shaded = state.map.sectors[cell.sector]?.shaded ?? false;
+    const alpha = shaded ? cell.depth / 5 : (3 * cell.depth) / 14;
+    if (alpha <= 0) return;
+    const { r, g, b } = state.map.fadeColor;
+    ctx.fillStyle = shaded ? '#000000' : `rgb(${r}, ${g}, ${b})`;
+    ctx.globalAlpha = alpha;
+    ctx.fillRect(x, y, width, height);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawSideWall(cell: ViewCell, near: Rect, far: Rect, side: 'left' | 'right', image: ImageData | undefined): void {
     ctx.save();
     ctx.beginPath();
     if (side === 'left') {
@@ -301,6 +334,7 @@ export function runDungeonView(
       ctx.fillStyle = '#443';
       ctx.fillRect(near.x, near.y, near.width, near.height);
     }
+    applyDepthShade(cell, near.x, near.y, near.width, near.height);
     ctx.restore();
   }
 
@@ -312,10 +346,10 @@ export function runDungeonView(
     const near = rectAtDepthLateral(cell.depth, cell.lateral);
     const far = rectAtDepthLateral(cell.depth + 1, cell.lateral);
     if (cell.lateral <= 0 && cell.leftWallTexture !== null) {
-      drawSideWall(near, far, 'left', textures.left.get(cell.leftWallTexture));
+      drawSideWall(cell, near, far, 'left', textures.left.get(cell.leftWallTexture));
     }
     if (cell.lateral >= 0 && cell.rightWallTexture !== null) {
-      drawSideWall(near, far, 'right', textures.right.get(cell.rightWallTexture));
+      drawSideWall(cell, near, far, 'right', textures.right.get(cell.rightWallTexture));
     }
   }
 
@@ -355,6 +389,9 @@ export function runDungeonView(
       const image = textures.main.get(cell.frontSecTexture);
       if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
     }
+    // One overlay covering every layer just drawn (arch/main/sec) — see
+    // applyDepthShade's own comment for why this is exact, not approximate.
+    applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
   }
 
   function drawTopBar(): void {

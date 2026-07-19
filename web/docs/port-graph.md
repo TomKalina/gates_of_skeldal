@@ -605,6 +605,62 @@ parity vs C build where applicable). Updated as issues close.
     visually dramatic tree-trunk/branch frame now appears across the
     forest scene, previously entirely unrendered; start room, door swing,
     and tree orientation all re-checked with no regressions.
+  - **Phase B3 — distance shading** (`SHADE_PAL`/`secnd_shade`/
+    `MC_SHADING`, 2026-07-19). Investigated whether the per-depth palette
+    selection already visible in `show_cel`/`show_cel2`'s source
+    (`zoom.palette=...+512*cely+...`, read during the wall-mirror
+    investigation but not acted on then) is real and active, via a
+    dispatched research agent. Confirmed: `game/skeldal.c`'s
+    `pcx_fade_decomp` loads every wall/door/arch texture bank
+    (`A_STRMAIN/LEFT/RIGHT/ARC/ARC2`) via `load_pcx(...,A_FADE_PAL,...,
+    mglob.fade_r,mglob.fade_g,mglob.fade_b)` unconditionally — no
+    per-texture opt-out — baking `libs/pcx.c`'s `palette_shadow`'s 5+5
+    palette variants into every one of them at load time. `mglob.fade_r/g/b`
+    comes from each map's own `A_MAPGLOB` block, confirmed genuinely
+    per-map-authored art direction by parsing the raw block bytes of all
+    22 shipped `.MAP` files directly: outdoor maps (LESPRED, LESDRIAD,
+    LESZA, ...) fade to `166,234,228` (pale cyan-green haze), the
+    underwater map (PODVODOU) to `9,36,80` (deep blue), tower/underground/
+    volcano maps (BILA_VEZ, PODZEMI, SKELDAL, SKRETI, SOPKA) to pure black.
+    `secnd_shade` (selects fade-to-black instead of fade-to-map-color) is
+    driven entirely by `render_scene`'s `if (map_coord[s].flags &
+    MC_SHADING) secnd_shade=1;` — a real per-sector `A_MAPINFO` flag, not a
+    cheat/debug toggle (no other writer found anywhere in the codebase) —
+    confirmed non-trivial by scanning every shipped map's `A_MAPINFO` data:
+    0 sectors in most maps, but up to 333/1134 (29%) in NEVIDITE.MAP.
+    `SHADE_STEPS=5` matches `VIEW3D_Z` exactly, one flat palette bucket per
+    depth level (0..4), no interpolation — derived the exact blend ratio
+    from `palette_shadow`'s formula rather than guessing: alpha (fraction
+    of target color mixed in) is `3*depth/14` for fade-to-map-color,
+    `depth/5` for fade-to-black.
+    Floor/ceiling are explicitly excluded — they load via a wholly
+    different, `palette_shadow`-unrelated path (`pcx_15bit_autofade`/
+    `A_16BIT`, just a header flag byte), confirmed in the same
+    investigation, so the shading overlay is only applied to wall/door/
+    arch draws.
+    Ported: `map-file.ts`'s `parseMapGlobal` now also extracts `fade_r/g/b`
+    (`DungeonMap.fadeColor`); a new `A_MAPINFO` (0x8009) parser
+    (`parseSectorShading`) extracts each sector's `MC_SHADING` bit,
+    merged into `MapSector.shaded` by index after the full block stream is
+    read (block order in the file isn't guaranteed, confirmed by testing
+    `A_MAPINFO` appearing *before* `A_SECTOR_MAP`). Rendering
+    (`dungeon-view.ts`'s `applyDepthShade`) draws one alpha-blended
+    solid-color overlay rect per cell, after all its texture layers
+    (arch+main+sec, or a side-wall image) are drawn — chosen deliberately
+    over shading each texture layer independently (closer to the real
+    per-texture palette-swap mechanism) because the two are mathematically
+    identical whenever every layer at a rect shares the same depth/alpha/
+    target color (alpha-over compositing distributes over blending) —
+    this is an exact port of the visible result, not an approximation.
+    2 new unit tests (`parseMapGlobal`'s `fadeColor` and `A_MAPINFO`'s
+    `MC_SHADING` merge, including block-order independence). Verified live:
+    the forest scene shows a dramatic, clearly graduated fade from
+    full-color near tree trunks to the pale cyan-green horizon; the start
+    room's near window (depth 0, alpha 0) stays completely untinted while
+    a farther receding side-wall panel shows one flat, depth-appropriate
+    wash — confirms the stepped-not-gradient behavior matches the source
+    exactly, not over- or under-applied. Compared directly against
+    `docs/reference/dungeon-table-scene.png`.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
