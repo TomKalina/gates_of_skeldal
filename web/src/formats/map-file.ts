@@ -48,6 +48,11 @@ const MA_LOADL = 7;
 // passageTextTrigger for how each trigger picks its own side of that gate).
 const MC_PASSSUC = 0x1;
 const MC_PASSFAIL = 0x2;
+// `#define MC_TOUCHSUC 0x4` — realgame.c's a_touch() fires this at the end
+// (see dungeon.ts's touchFrontWall for the full early-return/gate logic
+// ported alongside it). Real usage found only in SKRETI.MAP (25 of its 123
+// macro instructions); zero in every other currently-loadable map.
+const MC_TOUCHSUC = 0x4;
 
 const TSTENA_SIZE = 16;
 const TSECTOR_SIZE = 16;
@@ -91,6 +96,26 @@ export const SD_APPLY_2ND = 0x400000;
 // can be set independently (a side can draw both halves at once).
 export const SD_LEFT_ARC = 0x10000;
 export const SD_RIGHT_ARC = 0x20000;
+// realgame.c's a_touch(): "reacts on pass-through, not on touch" — a_touch
+// early-returns (before even call_macro(sid,MC_TOUCHSUC)) when this is set:
+// `if (q->flags & SD_PASS_ACTION) return;`. Inverted in a_pass() (`if
+// (!(q->flags & SD_PASS_ACTION)) return;`), so the two are a real, mutually
+// exclusive pair — a side's action either fires on walking through it or on
+// touching/clicking it, never both. Zero real matches found on any
+// A_OPEN_CLOSE side across every currently-loadable map (checked directly),
+// so this never actually gates the known door — ported for fidelity anyway
+// since a_touch's early-return logic is meaningless without it.
+export const SD_PASS_ACTION = 0x40;
+// a_touch(): `if (q->flags & SD_AUTOANIM) do_action(A_OPEN_CLOSE,sector,
+// dir,0,1);` — fires *unconditionally on touch*, independent of this
+// side's own configured `action` field, but only inside the `sec!=0 &&
+// SD_SEC_VIS` branch (see dungeon.ts's touchFrontWall). Real, but the raw
+// flag alone is a poor signal: it's set on ~97-100% of ALL sides in every
+// shipped map (not a rare "this bumps open" marker) — properly gated on
+// `sec!=0 && SD_SEC_VIS`, real bump-door counts are 0 (LESPRED/P_LESY_1),
+// 65 (SKRETI), 22 (PLANE), 109 (CAREDBAR), 26 (SOUTESKA) — genuinely
+// substantial once Phase D3's map transitions made those reachable.
+export const SD_AUTOANIM = 0x800000;
 
 // `oblouk` (TSTENA byte offset 2, game/globals.h's struct tstena) packs
 // several unrelated sub-fields into one byte; builder.c reads them as
@@ -131,6 +156,20 @@ export interface MapSide {
   secAnim: number;
   oblouk: number;
   action: number;
+  // realgame.c's a_touch(): `delay_action(q->action,q->sector_tag,
+  // q->side_tag,q->flags,0,0)` runs this side's `action` on the side named
+  // by sectorTag/sideTag, NOT necessarily the touched side itself — a real
+  // remote-switch mechanism (a lever touched here opening a door
+  // elsewhere), not just the touched-side's own reciprocal pair. Verified
+  // against every currently-loadable map: LESPRED's own known door
+  // (sector 14 dir 1) tags itself to (15,3) — its real mirror pair, not a
+  // self-reference — while sides where this and the touched location
+  // genuinely differ number 2 (LESPRED) up to 36 (SKRETI). See
+  // dungeon.ts's touchFrontWall for how the redirect is applied only to
+  // the action dispatch, never to SD_AUTOANIM (which the source keeps on
+  // the originally-touched sector/dir) or MC_TOUCHSUC (same).
+  sectorTag: number;
+  sideTag: number;
 }
 
 // do_action's A_OPEN_CLOSE case exactly: `if (!(q->flags & SD_PRIM_ANIM))
@@ -143,17 +182,29 @@ function reverseDoorDirection(side: MapSide): void {
   else side.flags ^= SD_SEC_FORV;
 }
 
-// A_OPEN_CLOSE toggle for the side at (sector, direction), plus its
-// mirrored opposite side if SD_APPLY_2ND is set (see the constant's own
-// comment) — verified against the real sector 14/15 door, where both
-// sides carry the flag, so opening it from either side opens both. Only
-// starts the swing; game/animation.ts's per-tick stepper carries it
-// through to completion. Mutates the map's sides in place — this port
-// treats a parsed DungeonMap as live session state, not immutable data,
-// the same way character stats mutate in place during chargen.
+// Runs the A_OPEN_CLOSE toggle unconditionally on the side at (sector,
+// direction), plus its mirrored opposite side if SD_APPLY_2ND is set (see
+// the constant's own comment) — verified against the real sector 14/15
+// door, where both sides carry the flag, so opening it from either side
+// opens both. Only starts the swing; game/animation.ts's per-tick stepper
+// carries it through to completion. Mutates the map's sides in place —
+// this port treats a parsed DungeonMap as live session state, not
+// immutable data, the same way character stats mutate in place during
+// chargen.
+//
+// Deliberately does NOT check `side.action === A_OPEN_CLOSE` (an earlier
+// version of this function did, but that doesn't match the real source —
+// do_action's own A_OPEN_CLOSE case, and its SD_APPLY_2ND mirror call,
+// never consult the side's own `action` field at all; they just run
+// unconditionally on whichever side they're pointed at. This function is
+// itself only ever *invoked* when the caller has already decided to run
+// A_OPEN_CLOSE — dungeon.ts's touchFrontWall does that decision-making now,
+// for two independent reasons (SD_AUTOANIM's direct call and a side whose
+// own `action` field happens to equal A_OPEN_CLOSE), so the redundant
+// internal gate would incorrectly block the first of those.
 export function toggleDoor(map: DungeonMap, sector: number, direction: number): void {
   const side = sideAt(map, sector, direction);
-  if (!side || side.action !== A_OPEN_CLOSE) return;
+  if (!side) return;
 
   reverseDoorDirection(side);
 
@@ -161,7 +212,7 @@ export function toggleDoor(map: DungeonMap, sector: number, direction: number): 
     const mirrorSector = map.sectors[sector]?.stepNext[direction];
     if (mirrorSector !== undefined) {
       const mirrorSide = sideAt(map, mirrorSector, (direction + 2) & 3);
-      if (mirrorSide && mirrorSide.action === A_OPEN_CLOSE) reverseDoorDirection(mirrorSide);
+      if (mirrorSide) reverseDoorDirection(mirrorSide);
     }
   }
 }
@@ -212,15 +263,14 @@ export interface DungeonMap {
   mapTransitions: ReadonlyMap<number, MapTransition>;
   // A_MAPMACR's MA_TEXTL/MC_PASSSUC instructions only (level flavor text
   // shown after successfully walking through a side) — see
-  // textTriggerAt()/dungeon.ts's passageTextTrigger(). MA_TEXTL/
-  // MC_TOUCHSUC (shown when *clicking* a wall, game/realgame.c's a_touch())
-  // is a real, distinct, more common case this port doesn't support yet —
-  // it needs a general wall-click primitive this port doesn't have (see
-  // EXECUTION-PLAN.md's A3 note on the same a_touch() being SD_AUTOANIM
-  // bump-doors' own prerequisite). MA_TEXTG (glob=1, the *global* `texty[]`
-  // table rather than this map's own level_texts) hasn't turned up in any
-  // currently-loadable map — also unsupported.
+  // textTriggerAt()/dungeon.ts's passageTextTrigger().
   textTriggers: ReadonlyMap<number, number>;
+  // A_MAPMACR's MA_TEXTL/MC_TOUCHSUC instructions (level flavor text shown
+  // after touching/clicking a wall, game/realgame.c's a_touch()) — see
+  // touchTextTriggerAt()/dungeon.ts's touchFrontWall(). MA_TEXTG (glob=1,
+  // the *global* `texty[]` table rather than this map's own level_texts)
+  // hasn't turned up in any currently-loadable map — unsupported.
+  touchTextTriggers: ReadonlyMap<number, number>;
 }
 
 export interface MapTransition {
@@ -314,15 +364,20 @@ function parsePlacedItems(bytes: Uint8Array, view: DataView): Map<number, number
 // bitfield, matching the small MA_* range 0..39) — the file format is
 // self-describing (length-prefixed), so instructions this port doesn't
 // interpret can simply be skipped by their declared size without knowing
-// their payload struct at all. Only two opcodes are extracted (MA_LOADL/
-// MC_PASSFAIL map transitions, MA_TEXTL/MC_PASSSUC level-text triggers);
-// every other opcode (dialogue, item creation, conditional jumps, ~35
-// more — game/macros.c's call_macro switch) is real map-scripting data
-// this port doesn't run yet (that's the general macro VM, EXECUTION-
-// PLAN.md's A2b, a separate multi-session effort).
-function parseMapMacros(bytes: Uint8Array, view: DataView): { transitions: Map<number, MapTransition>; textTriggers: Map<number, number> } {
+// their payload struct at all. Only three opcodes are extracted (MA_LOADL/
+// MC_PASSFAIL map transitions, MA_TEXTL/MC_PASSSUC and MA_TEXTL/
+// MC_TOUCHSUC level-text triggers); every other opcode (dialogue, item
+// creation, conditional jumps, ~35 more — game/macros.c's call_macro
+// switch) is real map-scripting data this port doesn't run yet (that's the
+// general macro VM, EXECUTION-PLAN.md's A2b, a separate multi-session
+// effort).
+function parseMapMacros(
+  bytes: Uint8Array,
+  view: DataView,
+): { transitions: Map<number, MapTransition>; textTriggers: Map<number, number>; touchTextTriggers: Map<number, number> } {
   const transitions = new Map<number, MapTransition>();
   const textTriggers = new Map<number, number>();
+  const touchTextTriggers = new Map<number, number>();
   let pos = 0;
   while (pos < bytes.length) {
     const combined = view.getInt32(pos, true);
@@ -339,16 +394,21 @@ function parseMapMacros(bytes: Uint8Array, view: DataView): { transitions: Map<n
         const startDirection = bytes[pos + 5]!;
         const mapName = readCString(bytes, pos + 6, pos + len).toUpperCase();
         transitions.set(combined, { mapName, startSector, startDirection });
-      } else if (action === MA_TEXTL && (flags & MC_PASSSUC) !== 0) {
+      } else if (action === MA_TEXTL && (flags & (MC_PASSSUC | MC_TOUCHSUC)) !== 0) {
         // TMA_TEXT: 4-byte header (action,flags,eflags,pflags) + int32
         // textindex — verified against real bytes (len=8 for every
-        // instance found), not assumed from the struct's own comments.
-        textTriggers.set(combined, view.getInt32(pos + 4, true));
+        // instance found), not assumed from the struct's own comments. A
+        // single instruction's flags could in principle set both bits at
+        // once (fire on either trigger) — checked independently, not as an
+        // if/else, so it lands in both maps when that happens.
+        const textIndex = view.getInt32(pos + 4, true);
+        if (flags & MC_PASSSUC) textTriggers.set(combined, textIndex);
+        if (flags & MC_TOUCHSUC) touchTextTriggers.set(combined, textIndex);
       }
       pos += len;
     }
   }
-  return { transitions, textTriggers };
+  return { transitions, textTriggers, touchTextTriggers };
 }
 
 function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
@@ -360,6 +420,8 @@ function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
       prim: bytes[o] ?? 0,
       sec: bytes[o + 1] ?? 0,
       oblouk: bytes[o + 2] ?? 0,
+      sideTag: bytes[o + 3] ?? 0,
+      sectorTag: view.getUint16(o + 4, true),
       flags: view.getUint32(o + 8, true),
       primAnim: bytes[o + 12] ?? 0,
       secAnim: bytes[o + 13] ?? 0,
@@ -413,6 +475,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
   let placedItems = new Map<number, number[]>();
   let mapTransitions = new Map<number, MapTransition>();
   let textTriggers = new Map<number, number>();
+  let touchTextTriggers = new Map<number, number>();
 
   for (;;) {
     if (pos + TAG_LENGTH + 12 > bytes.length) break;
@@ -474,6 +537,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
         const macros = parseMapMacros(payload, payloadView);
         mapTransitions = macros.transitions;
         textTriggers = macros.textTriggers;
+        touchTextTriggers = macros.touchTextTriggers;
         break;
       }
       default:
@@ -507,6 +571,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
     placedItems,
     mapTransitions,
     textTriggers,
+    touchTextTriggers,
   };
 }
 
@@ -520,6 +585,10 @@ export function placedItemsAt(map: DungeonMap, sector: number, direction: number
 
 export function textTriggerAt(map: DungeonMap, sector: number, direction: number): number | undefined {
   return map.textTriggers.get(sector * 4 + direction);
+}
+
+export function touchTextTriggerAt(map: DungeonMap, sector: number, direction: number): number | undefined {
+  return map.touchTextTriggers.get(sector * 4 + direction);
 }
 
 export function mapTransitionAt(map: DungeonMap, sector: number, direction: number): MapTransition | undefined {

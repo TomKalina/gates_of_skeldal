@@ -3,7 +3,7 @@ import { SD_PRIM_VIS, SD_SEC_VIS, type DungeonMap, type MapSide } from '../forma
 import { applyAction, A_HIDE_PRIM, A_HIDE_PRIM_SEC, A_HIDE_SEC, A_SHOW_HIDE_PRIM, A_SHOW_HIDE_SEC, A_SHOW_PRIM, A_SHOW_SEC } from './actions';
 
 function side(flags: number): MapSide {
-  return { prim: 1, sec: 1, oblouk: 0, flags, primAnim: 0, secAnim: 0, action: 0 };
+  return { prim: 1, sec: 1, oblouk: 0, sectorTag: 0, sideTag: 0, flags, primAnim: 0, secAnim: 0, action: 0 };
 }
 
 function testMap(sideFlags: number): DungeonMap {
@@ -24,6 +24,7 @@ function testMap(sideFlags: number): DungeonMap {
     placedItems: new Map(),
     mapTransitions: new Map(),
     textTriggers: new Map(),
+    touchTextTriggers: new Map(),
   };
 }
 

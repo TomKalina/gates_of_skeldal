@@ -1020,6 +1020,103 @@ parity vs C build where applicable). Updated as issues close.
       interactive doors past the same ~24-state static-reachability limit
       Phase D3 already ran into — not independently walked to, but the
       identical code path the spliced-fixture test exercises.
+  - **A3-followup — `a_touch` (real wall-click/Space-bar handler)**
+    (2026-07-19). Closes A3's own `SD_AUTOANIM` gap and D4's `MC_TOUCHSUC`
+    gap in one pass, since both are `a_touch`'s job in the real source.
+    Investigated via a dispatched, parallel research workflow (three
+    independent questions: `a_touch`'s exact semantics, the real click-to-
+    wall mapping, and real `SD_AUTOANIM`/`MC_TOUCHSUC` data prevalence),
+    then a *second*, adversarial code-review pass against the finished
+    diff — which caught two real bugs the first pass missed (see below).
+    Read `game/realgame.c`'s `a_touch()` (~line 1242), `do_action()`'s
+    `A_OPEN_CLOSE` case and its `SD_APPLY_2ND` trailing mirror, `delay_
+    action()`, and `game/clk_map.c`'s `clk_touch()` in full, not
+    paraphrased from memory.
+    - **Real click mechanism** (`clk_touch`, `game/clk_map.c`): resolves
+      `id=viewsector*4+viewdir` unconditionally — overwriting whatever the
+      click coordinates produced — so a click *anywhere accepted* always
+      touches the current front wall (depth 0, lateral 0) only; side walls
+      and farther cells are never clickable at all. This port's old click
+      handler (per-door-cell rect testing across every visible depth/
+      lateral) was the opposite of this — narrower in *what* it accepted
+      (doors only) but broader in *where* (any depth). Replaced with
+      `dungeon.ts`'s `touchFrontWall(map,sector,dir)`, always called with
+      the *live* sector/direction, never a `ViewCell`.
+    - **`a_touch`'s real logic**, ported into `touchFrontWall`: two early-
+      return guards, both skipping `MC_TOUCHSUC` entirely — `SD_PASS_
+      ACTION` set (a side that reacts on pass-through instead of touch;
+      zero real matches on any known door) or a linked secondary sector not
+      yet `SD_SEC_VIS` (can't trigger an action tied to an undiscovered
+      secret area). Otherwise: if `sec!=0 && SD_AUTOANIM`, `do_action(
+      A_OPEN_CLOSE,sector,dir,...)` fires *directly on the touched side*,
+      independent of that side's own `action` field (ported as an
+      unconditional `toggleDoor()` call — see its own updated comment for
+      why the old `action===A_OPEN_CLOSE` gate had to go). Separately,
+      whatever `action` is configured always runs via `runConfiguredAction`
+      (A_OPEN_CLOSE → `toggleDoor`, the 7 `actions.ts` codes → `applyAction`,
+      everything else a documented no-op). `MC_TOUCHSUC`'s `MA_TEXTL` result
+      is returned regardless of whether anything toggled.
+    - **`SD_AUTOANIM` real prevalence**: the raw flag is set on ~97-100% of
+      *all* sides in every shipped map — not a rare marker — but only does
+      anything when gated on `sec!=0 && SD_SEC_VIS` too (a real secondary/
+      door texture present *and* discovered). Properly gated real counts,
+      parsed directly from every loadable map: 0 (LESPRED, P_LESY_1), 22
+      (PLANE), 26 (SOUTESKA), 65 (SKRETI), 109 (CAREDBAR) — genuinely
+      substantial once Phase D3 made those maps reachable, confirming this
+      was worth doing now rather than deferring further.
+    - **Two real bugs found by the adversarial review pass** (not the
+      first research pass — a concrete reason this project keeps doing a
+      second, skeptical pass on finished diffs, not just on findings):
+      1. **`sectorTag`/`sideTag` redirection was dropped entirely.**
+         `a_touch` always calls `delay_action(q->action,q->sector_tag,
+         q->side_tag,...)` — the configured action fires on the side named
+         by `TSTENA`'s own `sector_tag`/`side_tag` fields (a real remote-
+         switch mechanism: a lever touched here can open a door elsewhere),
+         *not* necessarily the touched side. These two fields (`TSTENA`
+         byte 3 and bytes 4-5, verified via `-funsigned-char` + `offsetof()`
+         same as every other struct-layout question this session) were
+         never parsed at all. Checked every loadable map directly: sides
+         where the tag genuinely differs from the touched location are
+         real and not rare — 2 in LESPRED.MAP itself (its own known door,
+         which tags itself to `(15,3)`, not `(14,1)` — coincidentally
+         produces the same *end result* either way since both sides of
+         that specific pair carry `SD_APPLY_2ND` and point at each other,
+         which is exactly why this was easy to miss end-to-end-testing
+         against just that one door) up to 36 in SKRETI.MAP. Fixed:
+         `MapSide` gained `sectorTag`/`sideTag`; `touchFrontWall` redirects
+         only the `action` dispatch through them, keeping `SD_AUTOANIM`
+         and `MC_TOUCHSUC` on the originally-touched side (matching the
+         real source's own asymmetry there exactly).
+      2. **Click region was too permissive.** The first implementation
+         accepted a click anywhere in the whole 3D viewport; the real
+         `clk_touch` still rejects clicks outside a real (single) resolved
+         rect first — a smaller sprite bounding box when the side has a
+         visible door/decoration, else a `viewport_geometry`-derived front-
+         wall box — before ever calling `a_touch`. Tightened to the same
+         front-wall rect `drawFrontWall` itself draws into
+         (`rectAtDepthLateral(1,0)`) — an over-approximation for the
+         sprite-bbox case (a door's own art is usually smaller than the
+         full wall) but far closer than "anywhere in the viewport".
+    - **Known, deliberate remaining gap**: `do_action`'s `case 0` (`q->
+      flags=actn_flags(q,flags)`, fired on every ordinary wall touch —
+      real for ~52k of ~53k sides across the shipped maps) isn't ported;
+      `actn_flags`'s real effect (XORing bits 24-28, which have no `#define`
+      name in the header, into a side's own low bits) hasn't been
+      researched. Pre-existing gap in `actions.ts`'s scope, just reached
+      far more often now that clicking any wall (not only doors) calls
+      into this dispatch — flagged, not silently assumed harmless.
+    - Verified live (Playwright): the real known door (sector 14/15) still
+      opens correctly clicking dead-center of the viewport, *not* its own
+      door art — proving the coarse click region generalization without
+      regressing the one real door this port has tested against all
+      along. A byte-identical spliced copy of `LESPRED.MAP` (sector 14/
+      dir 1's `action` field cleared to 0, `SD_AUTOANIM` added instead, so
+      *only* the new bump-door path could open it) confirmed the door
+      still opens through that mechanism alone. The same spliced map
+      carried one injected `MA_TEXTL`/`MC_TOUCHSUC` instruction, confirmed
+      to show the correct, correctly-accented text on click (not just on
+      walk-through). Both re-verified again after the click-region
+      tightening fix, confirming no regression from that change either.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -1042,7 +1139,7 @@ parity vs C build where applicable). Updated as issues close.
 | `globmap.c` | overworld travel map (GLOBMAP.DAT DSL) | `src/game/worldmap.ts` | pending |
 | `kniha.c` | story book renderer | `src/game/book.ts` | pending |
 | `interfac.c` | GUI widgets, message boxes, BFS pathfinder | `src/gui/interfac.ts` | pending (its `enc_open`/`load_string_list_ex` — the `.ENC` level-text format — split out early into `src/formats/enc-file.ts`, see Phase D4 note; everything else in this file still pending) |
-| `clk_map.c` | mouse click-region dispatch (`T_CLK_MAP` + per-pixel PCX mask) | `src/gui/hotspot-mask.ts` | ported (menu/chargen consumers only — see Phase C note) |
+| `clk_map.c` | mouse click-region dispatch (`T_CLK_MAP` + per-pixel PCX mask; `clk_touch`'s dungeon-view wall-click resolution) | `src/gui/hotspot-mask.ts` (menu/chargen), `src/game/dungeon.ts`+`dungeon-view.ts` (`clk_touch` → `touchFrontWall`) | ported for both real consumers found so far — see Phase C and A3-followup notes |
 | `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (real MENUVOL5.PCX hit-testing ported; art/animation still placeholder) |
 | `setup.c` | settings screens | `src/gui/settings.ts` | pending |
 | `chargen.c` | character generation | `src/game/attribute-wheel.ts` (wheel math), `src/game/party.ts` (rolling/roster), `src/game/character-creation.ts` (screen) | in-progress, see note below |

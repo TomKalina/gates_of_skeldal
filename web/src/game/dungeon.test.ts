@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
-import { behind, canStep, computeVisibleGrid, computeViewCells, passageTextTrigger, pendingTransition, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
+import { A_OPEN_CLOSE, SD_AUTOANIM, SD_LEFT_ARC, SD_PASS_ACTION, SD_PLAY_IMPS, SD_PRIM_FORV, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_FORV, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
+import { behind, canStep, computeVisibleGrid, computeViewCells, passageTextTrigger, pendingTransition, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
-  return { prim, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
+  return { prim, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
 }
 // A real open passage is also SD_TRANSPARENT — verified against LESPRED.MAP,
 // where every side with no wall image (SD_PRIM_VIS unset) also has this bit
 // set, since visibility past an open side is gated by SD_TRANSPARENT, not
 // SD_PRIM_VIS (see dungeon.ts's computeVisibleGrid).
 function open(): MapSide {
-  return { prim: 0, sec: 0, oblouk: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0, action: 0 };
+  return { prim: 0, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_TRANSPARENT, primAnim: 0, secAnim: 0, action: 0 };
 }
 
 // A 2-sector corridor: sector 0 (start, facing East) is open east into
@@ -49,6 +49,7 @@ function buildTestMap(): DungeonMap {
     placedItems: new Map(),
     mapTransitions: new Map(),
     textTriggers: new Map(),
+    touchTextTriggers: new Map(),
   };
 }
 
@@ -76,7 +77,7 @@ describe('computeViewCells', () => {
     const map = buildTestMap();
     // sector 0's east side is open in the base fixture; give it a visible,
     // animated wall instead (prim=5, currently on frame 2 of its sequence).
-    const animated: MapSide = { prim: 5, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0, action: 0 };
+    const animated: MapSide = { prim: 5, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0x23, secAnim: 0, action: 0 };
     const animatedMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? animated : s)) };
 
     const cells = computeViewCells(animatedMap, 0, 1);
@@ -87,13 +88,16 @@ describe('computeViewCells', () => {
     // Verified against LESPRED.MAP's sector 14/15 door: prim=0 (nothing in
     // the primary slot) but sec=15 (a closed wooden door), SD_SEC_VIS set,
     // action=A_OPEN_CLOSE. The primary and secondary texture questions are
-    // fully independent (see visibleSecTexture in dungeon.ts).
+    // fully independent (see visibleSecTexture in dungeon.ts). Whether this
+    // side is actually a *clickable* door is a runtime question answered by
+    // touchFrontWall against the live sector/direction, not a per-cell
+    // ViewCell field — see this file's `touchFrontWall` describe block.
     const map = buildTestMap();
-    const door: MapSide = { prim: 0, sec: 9, oblouk: 0, flags: SD_PLAY_IMPS | SD_SEC_VIS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const door: MapSide = { prim: 0, sec: 9, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_SEC_VIS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
     const doorMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? door : s)) };
 
     const cells = computeViewCells(doorMap, 0, 1);
-    expect(cells[0]).toMatchObject({ frontWallTexture: null, frontSecTexture: 9, frontIsDoor: true });
+    expect(cells[0]).toMatchObject({ frontWallTexture: null, frontSecTexture: 9 });
   });
 
   it('draws a decorative arch overlay only when SD_LEFT_ARC/SD_RIGHT_ARC is set, independent of frontWallTexture', () => {
@@ -102,7 +106,7 @@ describe('computeViewCells', () => {
     // SD_RIGHT_ARC — the rest are inert. Both halves can be gated
     // independently (a side can draw one, both, or neither).
     const map = buildTestMap();
-    const archOnLeftOnly: MapSide = { prim: 5, sec: 0, oblouk: 2, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_LEFT_ARC, primAnim: 0, secAnim: 0, action: 0 };
+    const archOnLeftOnly: MapSide = { prim: 5, sec: 0, oblouk: 2, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_LEFT_ARC, primAnim: 0, secAnim: 0, action: 0 };
     const withArc: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? archOnLeftOnly : s)) };
 
     const cells = computeViewCells(withArc, 0, 1);
@@ -112,7 +116,7 @@ describe('computeViewCells', () => {
 
   it('an oblouk arch index with neither arc flag set draws no arch at all (the common, inert case)', () => {
     const map = buildTestMap();
-    const inertArchIndex: MapSide = { prim: 5, sec: 0, oblouk: 1, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
+    const inertArchIndex: MapSide = { prim: 5, sec: 0, oblouk: 1, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
     const inertMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? inertArchIndex : s)) };
 
     const cells = computeViewCells(inertMap, 0, 1);
@@ -122,7 +126,7 @@ describe('computeViewCells', () => {
 
   it('the arch index adds the same primAnim upper-nibble offset the main texture gets (GET_OBLOUK)', () => {
     const map = buildTestMap();
-    const animatedArch: MapSide = { prim: 5, sec: 0, oblouk: 1, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_RIGHT_ARC, primAnim: 0x20, secAnim: 0, action: 0 };
+    const animatedArch: MapSide = { prim: 5, sec: 0, oblouk: 1, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS | SD_RIGHT_ARC, primAnim: 0x20, secAnim: 0, action: 0 };
     const animatedMap: DungeonMap = { ...map, sides: map.sides.map((s, i) => (i === 1 ? animatedArch : s)) };
 
     const cells = computeViewCells(animatedMap, 0, 1);
@@ -211,5 +215,87 @@ describe('movement', () => {
     };
     expect(passageTextTrigger(map, 0, 1)).toBe(4);
     expect(passageTextTrigger(map, 1, 1)).toBeUndefined();
+  });
+});
+
+describe('touchFrontWall', () => {
+  function withSide(dirIndex: number, side: MapSide): DungeonMap {
+    const map = buildTestMap();
+    return { ...map, sides: map.sides.map((s, i) => (i === dirIndex ? side : s)) };
+  }
+
+  it('toggles a door via its own action field (side.action === A_OPEN_CLOSE), same as toggleDoor, when sectorTag/sideTag point at itself', () => {
+    // Matches the real known LESPRED.MAP door exactly: sector 14 dir 1's
+    // sectorTag/sideTag point at (15,3) — its own mirror pair, not itself —
+    // but a side whose tag genuinely points at itself (no real redirect
+    // configured) behaves identically to the pre-redirect implementation.
+    const door: MapSide = { prim: 0, sec: 9, oblouk: 0, sectorTag: 0, sideTag: 1, flags: SD_PLAY_IMPS | SD_SEC_VIS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const map = withSide(1, door);
+    const result = touchFrontWall(map, 0, 1);
+    expect(result.changed).toBe(true);
+    expect(map.sides[1]?.flags).toBe(SD_PLAY_IMPS | SD_SEC_VIS | SD_PRIM_FORV | SD_SEC_FORV);
+  });
+
+  it('redirects the action dispatch via sectorTag/sideTag to a genuinely different side — a real mechanism (game/realgame.c\'s a_touch: delay_action(q->action,q->sector_tag,q->side_tag,...)), e.g. a lever touched here opening a door elsewhere', () => {
+    // Touch sector 0's east side (a lever, say) — but its sectorTag/sideTag
+    // point at sector 1's east side (a real door elsewhere) instead of
+    // itself. Confirmed against real map data: this genuinely happens (2
+    // sides in LESPRED.MAP itself, up to 36 in SKRETI.MAP).
+    const lever: MapSide = { prim: 5, sec: 0, oblouk: 0, sectorTag: 1, sideTag: 1, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const remoteDoor: MapSide = { prim: 0, sec: 9, oblouk: 0, sectorTag: 1, sideTag: 1, flags: SD_PLAY_IMPS | SD_SEC_VIS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const base = buildTestMap();
+    const map: DungeonMap = { ...base, sides: base.sides.map((s, i) => (i === 1 ? lever : i === 5 ? remoteDoor : s)) };
+
+    const result = touchFrontWall(map, 0, 1);
+    expect(result.changed).toBe(true);
+    // The touched side (the lever) itself never toggles.
+    expect(map.sides[1]?.flags).toBe(SD_PLAY_IMPS);
+    // The remote door (sector 1, dir 1) does.
+    expect(map.sides[5]?.flags).toBe(SD_PLAY_IMPS | SD_SEC_VIS | SD_PRIM_FORV | SD_SEC_FORV);
+  });
+
+  it('toggles via SD_AUTOANIM even when the side\'s own action field is NOT A_OPEN_CLOSE — do_action(A_OPEN_CLOSE,...) is called directly, unconditionally', () => {
+    const bumpDoor: MapSide = { prim: 0, sec: 9, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_SEC_VIS | SD_AUTOANIM, primAnim: 0, secAnim: 0, action: 0 };
+    const map = withSide(1, bumpDoor);
+    const result = touchFrontWall(map, 0, 1);
+    expect(result.changed).toBe(true);
+    expect(map.sides[1]?.flags).toBe(SD_PLAY_IMPS | SD_SEC_VIS | SD_AUTOANIM | SD_PRIM_FORV | SD_SEC_FORV);
+  });
+
+  it('SD_AUTOANIM does nothing when sec===0, even if set (the gate is sec!=0 && SD_SEC_VIS, not the raw flag alone)', () => {
+    const side: MapSide = { prim: 5, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_AUTOANIM, primAnim: 0, secAnim: 0, action: 0 };
+    const map = withSide(1, side);
+    const result = touchFrontWall(map, 0, 1);
+    expect(result.changed).toBe(false);
+    expect(map.sides[1]?.flags).toBe(SD_PLAY_IMPS | SD_AUTOANIM);
+  });
+
+  it('SD_PASS_ACTION early-returns before anything else — a side that reacts on pass-through, not touch', () => {
+    const side: MapSide = { prim: 0, sec: 9, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_SEC_VIS | SD_AUTOANIM | SD_PASS_ACTION, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const map = withSide(1, side);
+    const result = touchFrontWall(map, 0, 1);
+    expect(result).toEqual({ changed: false, textIndex: undefined });
+    expect(map.sides[1]?.flags).toBe(SD_PLAY_IMPS | SD_SEC_VIS | SD_AUTOANIM | SD_PASS_ACTION); // unchanged
+  });
+
+  it('a linked secondary sector not yet visible (sec!=0 && !SD_SEC_VIS) early-returns without acting', () => {
+    const side: MapSide = { prim: 0, sec: 9, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const map = withSide(1, side);
+    const result = touchFrontWall(map, 0, 1);
+    expect(result).toEqual({ changed: false, textIndex: undefined });
+  });
+
+  it('returns the MC_TOUCHSUC text trigger for this side, independent of whether anything toggled', () => {
+    const map: DungeonMap = {
+      ...withSide(1, { prim: 5, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 0, action: 0 }),
+      touchTextTriggers: new Map([[0 * 4 + 1, 7]]),
+    };
+    const result = touchFrontWall(map, 0, 1);
+    expect(result).toEqual({ changed: false, textIndex: 7 });
+  });
+
+  it('does nothing at all for a side that does not exist', () => {
+    const map = buildTestMap();
+    expect(touchFrontWall(map, 99, 1)).toEqual({ changed: false, textIndex: undefined });
   });
 });

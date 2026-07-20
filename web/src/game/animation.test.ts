@@ -5,7 +5,7 @@ import { stepAllAnimations, stepSide } from './animation';
 // A door like the real sector 14/15 one: prim unused (pk=0), sec is a
 // 7-frame sequence (sk=7) starting closed (sj=0), SD_PLAY_IMPS set.
 function closedDoor(): MapSide {
-  return { prim: 0, sec: 15, oblouk: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
+  return { prim: 0, sec: 15, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
 }
 
 function singleSideMap(side: MapSide): DungeonMap {
@@ -26,12 +26,13 @@ function singleSideMap(side: MapSide): DungeonMap {
     placedItems: new Map(),
     mapTransitions: new Map(),
     textTriggers: new Map(),
+    touchTextTriggers: new Map(),
   };
 }
 
 describe('stepSide — one-shot (door) animation', () => {
   it('does nothing to a side with no animation range on either channel', () => {
-    const side: MapSide = { prim: 0, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
+    const side: MapSide = { prim: 0, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
     expect(stepSide(side)).toBe(false);
   });
 
@@ -85,7 +86,7 @@ describe('stepSide — one-shot (door) animation', () => {
   });
 
   it('a side with pk=0, sk=0 elsewhere but action=A_OPEN_CLOSE never changes (guarded by the early return)', () => {
-    const side: MapSide = { prim: 0, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
+    const side: MapSide = { prim: 0, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS, primAnim: 0, secAnim: 0, action: A_OPEN_CLOSE };
     expect(stepSide(side)).toBe(false);
     expect(side.flags & SD_PLAY_IMPS).toBe(SD_PLAY_IMPS);
   });
@@ -95,7 +96,7 @@ describe('stepSide — continuous (SD_PRIM_ANIM) animation', () => {
   it('wraps back to 0 once past the frame count, instead of clamping', () => {
     // primAnim upper nibble starts at 3, count 3 (i.e. already at the max);
     // SD_PRIM_ANIM + SD_PRIM_FORV set, stepping forward should wrap to 0.
-    const side: MapSide = { prim: 1, sec: 0, oblouk: 0, flags: SD_PRIM_ANIM | SD_PRIM_FORV, primAnim: (3 << 4) | 3, secAnim: 0, action: 0 };
+    const side: MapSide = { prim: 1, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PRIM_ANIM | SD_PRIM_FORV, primAnim: (3 << 4) | 3, secAnim: 0, action: 0 };
     expect(stepSide(side)).toBe(true);
     expect(side.primAnim >> 4).toBe(0);
   });
@@ -103,14 +104,14 @@ describe('stepSide — continuous (SD_PRIM_ANIM) animation', () => {
   it('SD_PRIM_GAB ping-pongs direction at each end instead of wrapping', () => {
     // At the top end (j===k) with GAB set: direction flips before stepping,
     // so it steps *down* this call instead of wrapping to 0.
-    const side: MapSide = { prim: 1, sec: 0, oblouk: 0, flags: SD_PRIM_ANIM | SD_PRIM_GAB | SD_PRIM_FORV, primAnim: (3 << 4) | 3, secAnim: 0, action: 0 };
+    const side: MapSide = { prim: 1, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PRIM_ANIM | SD_PRIM_GAB | SD_PRIM_FORV, primAnim: (3 << 4) | 3, secAnim: 0, action: 0 };
     stepSide(side);
     expect(side.primAnim >> 4).toBe(2);
     expect(side.flags & SD_PRIM_FORV).toBe(0); // direction flipped
   });
 
   it('the sec channel behaves the same way independently of prim, using SD_SEC_GAB/SD_SEC_FORV', () => {
-    const side: MapSide = { prim: 0, sec: 1, oblouk: 0, flags: (0x1000 /* SD_SEC_ANIM */) | SD_SEC_GAB | SD_SEC_FORV, primAnim: 0, secAnim: (3 << 4) | 3, action: 0 };
+    const side: MapSide = { prim: 0, sec: 1, oblouk: 0, sectorTag: 0, sideTag: 0, flags: (0x1000 /* SD_SEC_ANIM */) | SD_SEC_GAB | SD_SEC_FORV, primAnim: 0, secAnim: (3 << 4) | 3, action: 0 };
     stepSide(side);
     expect(side.secAnim >> 4).toBe(2);
     expect(side.flags & SD_SEC_FORV).toBe(0);
@@ -119,7 +120,7 @@ describe('stepSide — continuous (SD_PRIM_ANIM) animation', () => {
 
 describe('stepAllAnimations', () => {
   function blankSide(): MapSide {
-    return { prim: 0, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
+    return { prim: 0, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
   }
 
   it('steps the one animating side in the map and reports a change', () => {

@@ -1,5 +1,5 @@
-import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
-import { toggleDoor, type DungeonMap } from '../formats/map-file';
+import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import type { DungeonMap } from '../formats/map-file';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
@@ -191,11 +191,6 @@ export function runDungeonView(
   let levelTexts = initialLevelTexts;
   let hoverDpad: DpadDirection | null = null;
   let statusText = '';
-  // Cached from the last draw() for click hit-testing — doors are the only
-  // clickable thing in the 3D viewport, and their screen rects depend on
-  // the current view (depth/lateral), so a fresh grid computed on every
-  // draw is the only source of truth for "what's at this pixel".
-  let lastDoorCells: ViewCell[] = [];
 
   let resolveResult!: () => void;
   const result = new Promise<void>((resolve) => {
@@ -556,7 +551,6 @@ export function runDungeonView(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const grid = computeVisibleGrid(state.map, state.sector, state.direction);
-    lastDoorCells = grid.filter((cell) => cell.frontIsDoor);
 
     const centerColumn = grid.filter((cell) => cell.lateral === 0).sort((a, b) => a.depth - b.depth);
     const nearestCell = centerColumn[0];
@@ -622,14 +616,25 @@ export function runDungeonView(
     }
     // Nastavení and the icon cells have no system to open yet.
 
-    // Nearest door first, in case rects ever overlap.
-    const clickedDoor = [...lastDoorCells].sort((a, b) => a.depth - b.depth).find((cell) => {
-      const doorRect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
-      return rectContains(doorRect, x, y);
-    });
-    if (clickedDoor) {
-      toggleDoor(state.map, clickedDoor.sector, state.direction);
-      draw();
+    // realgame.c's clk_touch: no matter *where* within its resolved rect
+    // you click, it always resolves to the current front wall
+    // (`id=viewsector*4+viewdir` overwrites whatever the click math
+    // produced) — there's no fine per-pixel targeting of a specific door/
+    // cell in the real game (see dungeon.ts's touchFrontWall). But
+    // clk_touch does still reject a click outside that rect entirely
+    // (floor/ceiling/receding-corridor pixels): a smaller sprite bbox when
+    // the side has a visible door/decoration (`sec!=0 && SD_SEC_VIS`), else
+    // a `viewport_geometry`-derived front-wall box — never the whole
+    // viewport. Approximated here with the same front-wall rect drawFrontWall
+    // itself draws into (depth 0, lateral 0) — an over-approximation for the
+    // sprite-bbox case (a door's own art is usually smaller than the full
+    // wall), but far closer than accepting anywhere in the viewport.
+    if (rectContains(rectAtDepthLateral(1, 0), x, y)) {
+      const touch = touchFrontWall(state.map, state.sector, state.direction);
+      if (touch.changed || touch.textIndex !== undefined) {
+        if (touch.textIndex !== undefined) statusText = levelTexts.get(touch.textIndex) ?? '';
+        draw();
+      }
       return;
     }
 
@@ -688,7 +693,6 @@ export function runDungeonView(
     state = { map: loaded.map, sector: transition.startSector, direction: transition.startDirection as DungeonState['direction'] };
     textures = loaded.textures;
     levelTexts = loaded.levelTexts;
-    lastDoorCells = [];
     statusText = '';
     draw();
   }

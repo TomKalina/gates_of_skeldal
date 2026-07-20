@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, sideAt, textTriggerAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -249,7 +249,7 @@ describe('parseMapFile', () => {
     expect(mapTransitionAt(map, 6, 0)).toBeUndefined();
   });
 
-  it('parses A_MAPMACR MA_TEXTL/MC_PASSSUC instructions as level-text triggers, alongside MA_LOADL in the same pass', () => {
+  it('parses A_MAPMACR MA_TEXTL/MC_PASSSUC and MA_TEXTL/MC_TOUCHSUC instructions into their own separate trigger maps, alongside MA_LOADL in the same pass', () => {
     const MC_PASSSUC = 0x1;
     const MC_TOUCHSUC = 0x4;
     const buffer = new Uint8Array([
@@ -260,9 +260,6 @@ describe('parseMapFile', () => {
         new Uint8Array(
           macroBlockPayload([
             { sector: 8, direction: 2, instructions: [textlInstruction(MC_PASSSUC, 4)] },
-            // MA_TEXTL present but touch-gated, not walk-through-gated —
-            // this port doesn't hook wall-clicking yet (see map-file.ts's
-            // own comment), so this must not be extracted.
             { sector: 9, direction: 0, instructions: [textlInstruction(MC_TOUCHSUC, 1)] },
           ]),
         ),
@@ -271,13 +268,34 @@ describe('parseMapFile', () => {
     ]).buffer;
     const map = parseMapFile(buffer);
     expect(textTriggerAt(map, 8, 2)).toBe(4);
+    expect(touchTextTriggerAt(map, 9, 0)).toBe(1);
+    // Each trigger only lives in its own map — a PASSSUC-gated instruction
+    // isn't also readable via touchTextTriggerAt and vice versa.
+    expect(touchTextTriggerAt(map, 8, 2)).toBeUndefined();
     expect(textTriggerAt(map, 9, 0)).toBeUndefined();
   });
 
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
-    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
-    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 });
+    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
+    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 });
+  });
+
+  it('parses sideTag (byte 3) and sectorTag (u16 LE at byte 4) — a_touch\'s real action-redirect target, not necessarily the side itself', () => {
+    // TSTENA layout verified by compiling the real struct with
+    // -funsigned-char and reading offsetof(): sideTag@3, sectorTag@4.
+    const raw = new Uint8Array(16);
+    const view = new DataView(raw.buffer);
+    raw[3] = 3; // sideTag
+    view.setUint16(4, 15, true); // sectorTag
+    const buffer = new Uint8Array([
+      ...block(0x800a, mapGlobalPayload(0, 0, 'Test Map')),
+      ...block(0x8002, sectorPayload(1, 1, [0, 0, 0, 0])),
+      ...block(0x8001, new Uint8Array([...raw, ...sidePayload(0, 0), ...sidePayload(0, 0), ...sidePayload(0, 0)])),
+      ...block(0x8000, new Uint8Array(0)),
+    ]).buffer;
+    const map = parseMapFile(buffer);
+    expect(sideAt(map, 0, 0)).toMatchObject({ sectorTag: 15, sideTag: 3 });
   });
 
   it('parses oblouk, whose SD_HAS_NICHE bit flags a side with a TVYKLENEK niche attached', () => {
@@ -322,10 +340,10 @@ describe('toggleDoor', () => {
   // frame stepping and passability sync is game/animation.ts's job
   // (Phase A3) — see animation.test.ts for that.
   function door(flags = SD_PLAY_IMPS): MapSide {
-    return { prim: 0, sec: 15, oblouk: 0, flags, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
+    return { prim: 0, sec: 15, oblouk: 0, sectorTag: 0, sideTag: 0, flags, primAnim: 0, secAnim: 7, action: A_OPEN_CLOSE };
   }
   function blankSide(): MapSide {
-    return { prim: 0, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
+    return { prim: 0, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 };
   }
   // One sector (0), door at dir 1 (east), everything else blank.
   function singleDoorMap(flags = SD_PLAY_IMPS): DungeonMap {
@@ -346,6 +364,7 @@ describe('toggleDoor', () => {
     placedItems: new Map(),
     mapTransitions: new Map(),
     textTriggers: new Map(),
+    touchTextTriggers: new Map(),
     };
   }
 
@@ -374,11 +393,16 @@ describe('toggleDoor', () => {
     expect(side.flags & SD_SEC_FORV).toBe(SD_SEC_FORV);
   });
 
-  it('does nothing on a side without A_OPEN_CLOSE', () => {
+  it('toggles regardless of the side\'s own action field — do_action\'s real A_OPEN_CLOSE case never checks it, only the caller decides when to run it', () => {
     const map = singleDoorMap();
     map.sides[1]!.action = 0;
     toggleDoor(map, 0, 1);
-    expect(sideAt(map, 0, 1)?.flags).toBe(SD_PLAY_IMPS);
+    expect(sideAt(map, 0, 1)?.flags).toBe(SD_PLAY_IMPS | SD_PRIM_FORV | SD_SEC_FORV);
+  });
+
+  it('does nothing at all on a side that does not exist', () => {
+    const map = singleDoorMap();
+    expect(() => toggleDoor(map, 99, 1)).not.toThrow();
   });
 
   it('mirrors the toggle to the opposite side of the adjacent sector when SD_APPLY_2ND is set', () => {
@@ -407,6 +431,7 @@ describe('toggleDoor', () => {
     placedItems: new Map(),
     mapTransitions: new Map(),
     textTriggers: new Map(),
+    touchTextTriggers: new Map(),
     };
 
     toggleDoor(map, 0, 1);

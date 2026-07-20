@@ -123,11 +123,22 @@ sides (e.g. the start sector's decorative bracket, which does have
 Traced `SD_AUTOANIM`'s real meaning: `realgame.c`'s `a_touch(sector, dir)`
 — the player-touched-this-wall handler — auto-fires `A_OPEN_CLOSE` when a
 touched side has `SD_AUTOANIM` set. It's not "always animating," it's
-"reverses direction when bumped into," and needs `a_touch` itself (wired
-from movement collision, i.e. walking into a blocked wall) — a new input
-path this port doesn't have yet. Correctly out of scope for A3 itself;
-`a_touch` is natural A2a/A2b-adjacent follow-up, not filed as its own
-sub-phase yet.
+"reverses direction when bumped into," and needs `a_touch` itself — a new
+input path this port didn't have at the time.
+
+### A3-followup. `a_touch` — real wall-click handler — **done** (2026-07-19)
+`a_touch` is now ported (`src/game/dungeon.ts`'s `touchFrontWall`), see
+port-graph.md's own detailed entry — this both closes A3's `SD_AUTOANIM`
+gap above and replaces the old click-handling in `dungeon-view.ts` (which
+used to hit-test individual door cells at every depth/lateral) with the
+real, much coarser "click resolves to the current front wall, full stop"
+model. Also fixed two real bugs surfaced along the way: `map-file.ts`'s
+`toggleDoor` had an extra `side.action===A_OPEN_CLOSE` gate that doesn't
+exist in the real `do_action`'s `A_OPEN_CLOSE` case (removed), and
+`a_touch`'s action dispatch redirects via each side's own `sectorTag`/
+`sideTag` fields (real, previously-unparsed `TSTENA` data — a lever
+touched at one side can open a door elsewhere; found via a dispatched
+adversarial code review, not assumed).
 
 ## Phase B — Renderer fidelity (issue #10 remainder)
 
@@ -345,17 +356,15 @@ produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
   VM (A2b, still unported in general). `GLOBMAP.DAT` (`game/globmap.c`,
   the overworld fast-travel screen) is a distinct, separate feature — still
   pending.
-- **D4. Text decode** — **done for `.ENC` level texts +
-  `MA_TEXTL`/`MC_PASSSUC` display** (2026-07-19; see port-graph.md's Phase
-  D4 entry). `A_DISPLAY_TEXT` (the do_action-level text action) still has
-  zero real uses across every currently-loadable map — actual level text
-  is shown almost entirely through macro instructions instead, and only
-  the `MC_PASSSUC` (walked through successfully) trigger is wired; the far
-  more common `MC_TOUCHSUC` (clicking a wall) needs a general wall-click
-  primitive (`game/realgame.c`'s `a_touch()`) this port doesn't have yet —
-  same prerequisite A3 already flagged for `SD_AUTOANIM` bump-doors.
-  `MA_TEXTG` (the separate global `texty[]` table) hasn't turned up in any
-  loadable map either — unsupported, undecoded.
+- **D4. Text decode** — **done for `.ENC` level texts, `MA_TEXTL`/
+  `MC_PASSSUC` (walk-through) *and* `MA_TEXTL`/`MC_TOUCHSUC` (click-a-wall)
+  display** (2026-07-19, the latter once A3-followup's `a_touch` port
+  landed; see port-graph.md's Phase D4 entry). `A_DISPLAY_TEXT` (the
+  do_action-level text action) still has zero real uses across every
+  currently-loadable map — actual level text is shown almost entirely
+  through macro instructions instead. `MA_TEXTG` (the separate global
+  `texty[]` table) hasn't turned up in any loadable map either —
+  unsupported, undecoded.
 
 ## Phase E — Beings (issue #15)
 
