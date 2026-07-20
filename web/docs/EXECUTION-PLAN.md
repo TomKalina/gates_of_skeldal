@@ -345,8 +345,17 @@ produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
   VM (A2b, still unported in general). `GLOBMAP.DAT` (`game/globmap.c`,
   the overworld fast-travel screen) is a distinct, separate feature — still
   pending.
-- **D4. Text decode**: `.ENC` level texts + Kamenický encoding
-  (`libs/cztable.c`) — unblocks `A_DISPLAY_TEXT`, dialogs later.
+- **D4. Text decode** — **done for `.ENC` level texts +
+  `MA_TEXTL`/`MC_PASSSUC` display** (2026-07-19; see port-graph.md's Phase
+  D4 entry). `A_DISPLAY_TEXT` (the do_action-level text action) still has
+  zero real uses across every currently-loadable map — actual level text
+  is shown almost entirely through macro instructions instead, and only
+  the `MC_PASSSUC` (walked through successfully) trigger is wired; the far
+  more common `MC_TOUCHSUC` (clicking a wall) needs a general wall-click
+  primitive (`game/realgame.c`'s `a_touch()`) this port doesn't have yet —
+  same prerequisite A3 already flagged for `SD_AUTOANIM` bump-doors.
+  `MA_TEXTG` (the separate global `texty[]` table) hasn't turned up in any
+  loadable map either — unsupported, undecoded.
 
 ## Phase E — Beings (issue #15)
 

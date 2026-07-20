@@ -25,6 +25,7 @@ function singleSideMap(side: MapSide): DungeonMap {
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
     mapTransitions: new Map(),
+    textTriggers: new Map(),
   };
 }
 

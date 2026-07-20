@@ -13,16 +13,24 @@ const ALLOWED_DEV_ASSETS = new Set(['SKELDAL.DDL']);
 // separate `maps` path), not inside SKELDAL.DDL — allowlisted individually
 // as new maps are needed. SKRETI/PLANE/CAREDBAR/SOUTESKA/P_LESY_1 are the
 // real MA_LOADL/MC_PASSFAIL map-transition targets found in LESPRED.MAP's
-// own A_MAPMACR data (see map-file.ts's parseMapTransitions) — walking into
-// the map edges those macros are attached to now actually loads them.
+// own A_MAPMACR data (see map-file.ts's parseMapMacros) — walking into
+// the map edges those macros are attached to now actually loads them. Each
+// map's own .ENC level-text file (see formats/enc-file.ts) lives right
+// alongside it under the same basename.
 const ALLOWED_DEV_MAPS = new Set([
   'LESPRED.MAP',
+  'LESPRED.ENC',
   'ITEMS.DAT',
   'SKRETI.MAP',
+  'SKRETI.ENC',
   'PLANE.MAP',
+  'PLANE.ENC',
   'CAREDBAR.MAP',
+  'CAREDBAR.ENC',
   'SOUTESKA.MAP',
+  'SOUTESKA.ENC',
   'P_LESY_1.MAP',
+  'P_LESY_1.ENC',
 ]);
 
 function serveLocalGameData(): Plugin {

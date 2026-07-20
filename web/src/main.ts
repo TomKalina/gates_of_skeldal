@@ -10,6 +10,7 @@ import type { HotspotMask } from './gui/hotspot-mask';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { parseItemsFile } from './formats/items-file';
+import { parseEncFile } from './formats/enc-file';
 import { decodePcx, flipImageDataHorizontally, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
@@ -369,6 +370,18 @@ function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
   ctx.fillText(message, 40, ctx.canvas.height / 2);
 }
 
+// Same basename, .ENC extension (game/interfac.c: enc_open falls back to
+// this exact substitution when no plaintext companion file exists — the
+// only case this port's data has).
+function encFileNameFor(mapName: string): string {
+  return mapName.replace(/\.MAP$/i, '.ENC');
+}
+
+async function loadLevelTexts(mapName: string): Promise<ReadonlyMap<number, string>> {
+  const buffer = await tryAutoLoadMap(encFileNameFor(mapName));
+  return buffer ? parseEncFile(buffer) : new Map();
+}
+
 async function enterDungeon(
   ctx: CanvasRenderingContext2D,
   archive: DDLArchive,
@@ -384,16 +397,22 @@ async function enterDungeon(
   // MA_LOADL/MC_PASSFAIL map transitions (dungeon.ts's pendingTransition):
   // ITEMS.DAT is a single global catalog shared by every map (loaded once
   // by the real inv.c's load_items(), not per-map), so itemAppearance is
-  // captured once here and reused for every subsequent map fetched.
+  // captured once here and reused for every subsequent map fetched. Each
+  // map's own .ENC level texts, unlike ITEMS.DAT, are refetched per map.
   const loadMap: MapLoader = async (mapName) => {
     const buffer = await tryAutoLoadMap(mapName);
     if (!buffer) return null;
     const nextMap = parseMapFile(buffer);
-    return { map: nextMap, textures: loadDungeonTextures(archive, nextMap, itemAppearance) };
+    return {
+      map: nextMap,
+      textures: loadDungeonTextures(archive, nextMap, itemAppearance),
+      levelTexts: await loadLevelTexts(mapName),
+    };
   };
 
   const map = parseMapFile(mapBuffer);
   const textures = loadDungeonTextures(archive, map, itemAppearance);
+  const levelTexts = await loadLevelTexts(START_MAP);
   const { result } = runDungeonView(
     ctx,
     { map, sector: start?.sector ?? map.startSector, direction: start?.direction ?? (map.startDirection as Direction) },
@@ -401,6 +420,7 @@ async function enterDungeon(
     party,
     chrome,
     loadMap,
+    levelTexts,
   );
   await result; // resolves when KONEC is clicked
   return true;

@@ -1,4 +1,4 @@
-import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, type DungeonMap, type MapTransition } from '../formats/map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, textTriggerAt, type DungeonMap, type MapTransition } from '../formats/map-file';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
 export type Direction = 0 | 1 | 2 | 3;
@@ -38,6 +38,17 @@ export function canStep(map: DungeonMap, sector: number, dir: Direction): boolea
 export function pendingTransition(map: DungeonMap, sector: number, dir: Direction): MapTransition | undefined {
   if (canStep(map, sector, dir)) return undefined;
   return mapTransitionAt(map, sector, dir);
+}
+
+// realgame.c's step_zoom(): the MC_PASSSUC counterpart of pendingTransition
+// above — an MA_TEXTL macro gated on MC_PASSSUC only fires on a side you
+// *successfully* walk through, so this returns a level_texts index (see
+// enc-file.ts) only when canStep is true. Returns the raw index, not the
+// resolved string — level_texts lives outside DungeonMap (a separate,
+// per-map .ENC fetch, same convention as ITEMS.DAT's itemAppearance).
+export function passageTextTrigger(map: DungeonMap, sector: number, dir: Direction): number | undefined {
+  if (!canStep(map, sector, dir)) return undefined;
+  return textTriggerAt(map, sector, dir);
 }
 
 function stepThrough(state: DungeonState, dir: Direction): DungeonState {

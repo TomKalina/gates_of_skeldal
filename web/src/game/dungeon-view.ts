@@ -1,4 +1,4 @@
-import { behind, computeVisibleGrid, pendingTransition, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, stepBackward, stepForward, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import { toggleDoor, type DungeonMap } from '../formats/map-file';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
@@ -170,10 +170,11 @@ const PARTY_ROW_X = 24;
 // no inventory/combat state exists yet to persist beyond position.
 // realgame.c's step_zoom() firing an MA_LOADL/MC_PASSFAIL macro (see
 // dungeon.ts's pendingTransition): fetch/parse/texture-load the target map
-// and hand it back, or null if that failed (e.g. the map file 404s) — the
-// view then just stays put, same graceful-degradation convention as every
-// other missing-asset case in this port.
-export type MapLoader = (mapName: string) => Promise<{ map: DungeonMap; textures: DungeonTextureSet } | null>;
+// (and its own .ENC level texts, see enc-file.ts) and hand it back, or null
+// if that failed (e.g. the map file 404s) — the view then just stays put,
+// same graceful-degradation convention as every other missing-asset case
+// in this port.
+export type MapLoader = (mapName: string) => Promise<{ map: DungeonMap; textures: DungeonTextureSet; levelTexts: ReadonlyMap<number, string> } | null>;
 
 export function runDungeonView(
   ctx: CanvasRenderingContext2D,
@@ -182,10 +183,12 @@ export function runDungeonView(
   party: readonly Character[],
   chrome: DungeonChromeAssets = {},
   loadMap: MapLoader = () => Promise.resolve(null),
+  initialLevelTexts: ReadonlyMap<number, string> = new Map(),
 ): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
   let textures = initialTextures;
+  let levelTexts = initialLevelTexts;
   let hoverDpad: DpadDirection | null = null;
   let statusText = '';
   // Cached from the last draw() for click hit-testing — doors are the only
@@ -684,19 +687,25 @@ export function runDungeonView(
     if (!loaded) return;
     state = { map: loaded.map, sector: transition.startSector, direction: transition.startDirection as DungeonState['direction'] };
     textures = loaded.textures;
+    levelTexts = loaded.levelTexts;
     lastDoorCells = [];
     statusText = '';
     draw();
   }
 
+  // realgame.c's step_zoom(): an MA_TEXTL/MC_PASSSUC macro fires on this
+  // exact side/direction right after a successful step through it (see
+  // dungeon.ts's passageTextTrigger) — shown via the same bottom-bar
+  // statusText every other in-view message already uses.
   function attemptStep(dir: DungeonState['direction'], step: (s: DungeonState) => DungeonState): void {
     const transition = pendingTransition(state.map, state.sector, dir);
     if (transition) {
       void performTransition(transition);
       return;
     }
+    const textIndex = passageTextTrigger(state.map, state.sector, dir);
     state = step(state);
-    statusText = '';
+    statusText = textIndex !== undefined ? (levelTexts.get(textIndex) ?? '') : '';
     draw();
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { A_OPEN_CLOSE, SD_LEFT_ARC, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
-import { behind, canStep, computeVisibleGrid, computeViewCells, pendingTransition, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
+import { behind, canStep, computeVisibleGrid, computeViewCells, passageTextTrigger, pendingTransition, stepBackward, stepForward, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
   return { prim, sec: 0, oblouk: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
@@ -48,6 +48,7 @@ function buildTestMap(): DungeonMap {
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
     mapTransitions: new Map(),
+    textTriggers: new Map(),
   };
 }
 
@@ -195,5 +196,20 @@ describe('movement', () => {
     // Same sector's other blocked walls carry no transition.
     expect(pendingTransition(map, 1, 0)).toBeUndefined();
     expect(pendingTransition(map, 0, 1)).toBeUndefined();
+  });
+
+  it('passageTextTrigger only fires on a passable side that carries a text trigger', () => {
+    const map: DungeonMap = {
+      ...buildTestMap(),
+      textTriggers: new Map([
+        [0 * 4 + 1, 4], // open east side of sector 0
+        // A blocked side never fires one even if (hypothetically) tagged —
+        // real MA_TEXTL/MC_PASSSUC data only ever gates a passable side
+        // (see map-file.ts), so this guards the precondition itself.
+        [1 * 4 + 1, 1],
+      ]),
+    };
+    expect(passageTextTrigger(map, 0, 1)).toBe(4);
+    expect(passageTextTrigger(map, 1, 1)).toBeUndefined();
   });
 });

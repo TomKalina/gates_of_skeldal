@@ -27,21 +27,26 @@ const BLOCK_MAP_END = 0x8000;
 
 // game/macros.c's tma_gen bitfield: `action:6, cancel:1, once:1` packed into
 // byte 0, `flags:16` (the MC_* trigger mask this instruction responds to)
-// spanning bytes 1-2 LE. Other TMA_* structs alias the same 3 bytes as
-// plain `uint8_t action,flags,eflags` — "flags"/"eflags" there are just the
-// low/high byte of this same 16-bit field, not two separate ones.
+// spanning bytes 1-2 LE. Other TMA_* structs alias the same 3 bytes (or, for
+// TMA_TEXT below, 4 — it has its own extra `pflags` byte before its
+// payload) as plain `uint8_t action,flags,eflags[,pflags]` — "flags"/
+// "eflags" there are just the low/high byte of this same 16-bit field, not
+// two separate ones.
+const MA_TEXTL = 3;
 const MA_LOADL = 7;
-// game/globals.h: `#define MC_PASSFAIL 0x2`. Fires from realgame.c's
-// step_zoom() exactly when the side being stepped into is SD_PLAY_IMPS-
-// blocked (`nopass`) — real, load-bearing per game/realgame.c's
-// `if (nopass) call_macro(sid,MC_PASSFAIL); else call_macro(sid,MC_PASSSUC);`.
+// game/globals.h: `#define MC_PASSSUC 0x1` / `#define MC_PASSFAIL 0x2`.
+// Both fire from realgame.c's step_zoom(), mutually exclusive per attempt:
+// `nopass = (side.flags & SD_PLAY_IMPS); if (nopass) call_macro(sid,
+// MC_PASSFAIL); else call_macro(sid,MC_PASSSUC);` — i.e. PASSFAIL is an
+// "invisible" transition (the wall LOOKS solid but walking into it acts),
+// PASSSUC fires on successfully walking through an ordinary open side.
 // Every real MA_LOADL instruction found across this port's loadable maps
-// uses this trigger exclusively (an "invisible" map-edge transition: the
-// wall LOOKS solid but walking into it loads the neighboring map) — a
-// PASSSUC-gated map transition (fired on successfully walking through an
-// ordinary passable side) is a real, distinct case this port doesn't
-// support yet, since it needs hooking successful movement too, not just
-// blocked attempts.
+// is PASSFAIL-gated; a PASSSUC-gated map transition is a real, distinct
+// case this port doesn't support yet (would need the same hook on
+// *successful* movement, not just blocked attempts — canStep already
+// distinguishes the two, see dungeon.ts's pendingTransition/
+// passageTextTrigger for how each trigger picks its own side of that gate).
+const MC_PASSSUC = 0x1;
 const MC_PASSFAIL = 0x2;
 
 const TSTENA_SIZE = 16;
@@ -205,6 +210,17 @@ export interface DungeonMap {
   // interpret the general ~40-opcode macro VM — see mapTransitionAt() and
   // dungeon.ts's pendingTransition()), keyed by sector*4+direction.
   mapTransitions: ReadonlyMap<number, MapTransition>;
+  // A_MAPMACR's MA_TEXTL/MC_PASSSUC instructions only (level flavor text
+  // shown after successfully walking through a side) — see
+  // textTriggerAt()/dungeon.ts's passageTextTrigger(). MA_TEXTL/
+  // MC_TOUCHSUC (shown when *clicking* a wall, game/realgame.c's a_touch())
+  // is a real, distinct, more common case this port doesn't support yet —
+  // it needs a general wall-click primitive this port doesn't have (see
+  // EXECUTION-PLAN.md's A3 note on the same a_touch() being SD_AUTOANIM
+  // bump-doors' own prerequisite). MA_TEXTG (glob=1, the *global* `texty[]`
+  // table rather than this map's own level_texts) hasn't turned up in any
+  // currently-loadable map — also unsupported.
+  textTriggers: ReadonlyMap<number, number>;
 }
 
 export interface MapTransition {
@@ -298,13 +314,15 @@ function parsePlacedItems(bytes: Uint8Array, view: DataView): Map<number, number
 // bitfield, matching the small MA_* range 0..39) — the file format is
 // self-describing (length-prefixed), so instructions this port doesn't
 // interpret can simply be skipped by their declared size without knowing
-// their payload struct at all. Only MA_LOADL (map transition) instructions
-// gated by MC_PASSFAIL are extracted; every other opcode (dialogue, item
-// creation, conditional jumps, ~37 more — game/macros.c's call_macro switch)
-// is real map-scripting data this port doesn't run yet (that's the general
-// macro VM, EXECUTION-PLAN.md's A2b, a separate multi-session effort).
-function parseMapTransitions(bytes: Uint8Array, view: DataView): Map<number, MapTransition> {
+// their payload struct at all. Only two opcodes are extracted (MA_LOADL/
+// MC_PASSFAIL map transitions, MA_TEXTL/MC_PASSSUC level-text triggers);
+// every other opcode (dialogue, item creation, conditional jumps, ~35
+// more — game/macros.c's call_macro switch) is real map-scripting data
+// this port doesn't run yet (that's the general macro VM, EXECUTION-
+// PLAN.md's A2b, a separate multi-session effort).
+function parseMapMacros(bytes: Uint8Array, view: DataView): { transitions: Map<number, MapTransition>; textTriggers: Map<number, number> } {
   const transitions = new Map<number, MapTransition>();
+  const textTriggers = new Map<number, number>();
   let pos = 0;
   while (pos < bytes.length) {
     const combined = view.getInt32(pos, true);
@@ -321,11 +339,16 @@ function parseMapTransitions(bytes: Uint8Array, view: DataView): Map<number, Map
         const startDirection = bytes[pos + 5]!;
         const mapName = readCString(bytes, pos + 6, pos + len).toUpperCase();
         transitions.set(combined, { mapName, startSector, startDirection });
+      } else if (action === MA_TEXTL && (flags & MC_PASSSUC) !== 0) {
+        // TMA_TEXT: 4-byte header (action,flags,eflags,pflags) + int32
+        // textindex — verified against real bytes (len=8 for every
+        // instance found), not assumed from the struct's own comments.
+        textTriggers.set(combined, view.getInt32(pos + 4, true));
       }
       pos += len;
     }
   }
-  return transitions;
+  return { transitions, textTriggers };
 }
 
 function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
@@ -389,6 +412,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
   let archRightTextures: string[] = [];
   let placedItems = new Map<number, number[]>();
   let mapTransitions = new Map<number, MapTransition>();
+  let textTriggers = new Map<number, number>();
 
   for (;;) {
     if (pos + TAG_LENGTH + 12 > bytes.length) break;
@@ -446,9 +470,12 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
       case BLOCK_MAP_ITEM:
         placedItems = parsePlacedItems(payload, payloadView);
         break;
-      case BLOCK_MAP_MACR:
-        mapTransitions = parseMapTransitions(payload, payloadView);
+      case BLOCK_MAP_MACR: {
+        const macros = parseMapMacros(payload, payloadView);
+        mapTransitions = macros.transitions;
+        textTriggers = macros.textTriggers;
         break;
+      }
       default:
         break;
     }
@@ -479,6 +506,7 @@ export function parseMapFile(buffer: ArrayBuffer): DungeonMap {
     archRightTextures,
     placedItems,
     mapTransitions,
+    textTriggers,
   };
 }
 
@@ -488,6 +516,10 @@ export function sideAt(map: DungeonMap, sector: number, direction: number): MapS
 
 export function placedItemsAt(map: DungeonMap, sector: number, direction: number): readonly number[] {
   return map.placedItems.get(sector * 4 + direction) ?? [];
+}
+
+export function textTriggerAt(map: DungeonMap, sector: number, direction: number): number | undefined {
+  return map.textTriggers.get(sector * 4 + direction);
 }
 
 export function mapTransitionAt(map: DungeonMap, sector: number, direction: number): MapTransition | undefined {

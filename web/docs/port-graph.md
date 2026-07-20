@@ -924,6 +924,102 @@ parity vs C build where applicable). Updated as issues close.
       states from the start sector — most of the map sits behind
       interactive doors a static analysis can't open, not a bug in this
       feature.
+  - **Phase D4 — level text (`.ENC` decode, `MA_TEXTL`/`MC_PASSSUC`
+    display)** (2026-07-19). Investigated `game/realgame.c`'s
+    `A_DISPLAY_TEXT` action first (the execution plan's original
+    assumption for how level text gets shown) — a full scan of every
+    currently-loadable map found **zero** sides using it. Actual level
+    text turns out to go almost entirely through `game/macros.c`'s
+    `MA_TEXTL`/`MA_TEXTG` macro opcodes instead (same `A_MAPMACR`
+    instruction stream `MA_LOADL` already taps for Phase D3) — extracted
+    both in the same parse pass rather than adding a second one.
+    - `.ENC` file format (`game/interfac.c`'s `enc_open`/
+      `load_string_list_ex`): two independent, stacked transforms. (1) A
+      trivial running-sum byte cipher — `last=(last+encdata[i])&0xFF;
+      encdata[i]=last;` run once over the *whole* file — is real
+      decryption here, since every map ships only the `.ENC` (encrypted)
+      form, never a plaintext companion. (2) The decoded bytes are
+      Kamenický (DOS Czech code page) text. Ported `libs/cztable.c`'s
+      36-entry diacritic remap table into Windows-1250, then decoded via
+      a standard WHATWG `TextDecoder('windows-1250')` — the real engine
+      never does this (its own bitmap font renders Kamenický bytes
+      directly; `kamenik2windows` is export-tooling only, used by `game/
+      gen_stringtable.c` to dump strings for translators, not by the
+      runtime renderer), but this port draws text with a real system
+      font, so it genuinely needs Unicode. Verified against the real
+      `LESPRED.ENC`/`SKRETI.ENC`: decodes to grammatically correct,
+      correctly-accented Czech ("Tvé dobrodružství začalo ve Fregharově
+      obydlí po té, co tví tři dobrodruzi vystoupili z rituálu
+      Krow-Kane."; "Ucítil jsi slabý průvan."; "Chodba skřetích králů.").
+      The decoded text is a simple line format (blank lines/`;` comments
+      skipped, `<index> <text>` per line, `-1` terminates, `|` means an
+      embedded newline) — entry 0 is always the map's music playlist
+      (`realgame.c`: `create_playlist(level_texts[0])`), never real
+      display text. Ported to `src/formats/enc-file.ts`'s `parseEncFile`.
+    - `TMA_TEXT`'s on-disk layout (verified against real bytes, not
+      assumed): a **4-byte** header (`action,flags,eflags,pflags`) — one
+      byte more than `TMA_LOADLEV`'s 3-byte header (`action,flags,eflags`)
+      — then a 4-byte `textindex` (i32 LE), 8 bytes total, matching every
+      real instance's declared length. Missed this on the first pass
+      (assumed a uniform 3-byte header from `TMA_LOADLEV`) — the read
+      textindex values (768/512/256) were obviously wrong (way too large
+      for a text table with a handful of entries), caught by sanity-
+      checking against real data before writing any TS, re-derived from
+      the struct's actual field list, and got small, sane indices (1/2/3/4)
+      matching each map's real `.ENC` entry count.
+    - Parsed every reachable map's real `A_MAPMACR` data directly: 0
+      `MA_TEXTG`/`MA_TEXTL` instances in `LESPRED`/`PLANE`/`CAREDBAR`/
+      `SOUTESKA`/`P_LESY_1`, but **27** in `SKRETI.MAP` (reachable only
+      since Phase D3) — 15 `MA_TEXTL`, 0 `MA_TEXTG`. Of those 15: 2 are
+      `MC_PASSSUC`-gated (walk-through text), 13 are `MC_TOUCHSUC`-gated
+      (click-a-wall text). Only the `MC_PASSSUC` case is ported — see the
+      deliberate gap below.
+    - Ported: `map-file.ts`'s `parseMapTransitions` was generalized into
+      `parseMapMacros` (one pass over `A_MAPMACR` now extracts both
+      `MA_LOADL`/`MC_PASSFAIL` map transitions *and* `MA_TEXTL`/
+      `MC_PASSSUC` text triggers) → `DungeonMap.textTriggers`/
+      `textTriggerAt()`. `dungeon.ts`'s `passageTextTrigger(map,sector,
+      dir)` mirrors `pendingTransition`'s shape exactly but on the
+      opposite precondition (`canStep` must be *true* — `MC_PASSSUC` only
+      ever gates a passable side, the inverse of `MC_PASSFAIL`).
+      `dungeon-view.ts`: `runDungeonView` takes a new `initialLevelTexts`
+      param and `MapLoader`'s return type grew a `levelTexts` field
+      (refetched per map, unlike `ITEMS.DAT`'s one-time-loaded catalog);
+      `attemptStep()` checks `passageTextTrigger` right before a
+      successful step and shows the resolved text via the same bottom-bar
+      `statusText` every other in-view message already uses. `main.ts`
+      derives each map's `.ENC` filename from its own basename
+      (`encFileNameFor`) and fetches it alongside the `.MAP` file, both on
+      initial entry and inside the `loadMap` transition callback.
+      `vite.config.ts`'s dev allowlist grew the matching `.ENC` filenames.
+    - **Known, deliberate gaps**: `MC_TOUCHSUC` (click-a-wall text, the
+      *more common* case in real data — 13/15 in `SKRETI.MAP` alone) isn't
+      hooked — it needs a general wall-click primitive (`game/realgame.c`'s
+      `a_touch()`) this port doesn't have, the same prerequisite
+      `EXECUTION-PLAN.md`'s A3 already flagged for `SD_AUTOANIM` bump-doors;
+      implementing one deserves its own pass rather than folding it into
+      this one silently. `MA_TEXTG` (glob=1, the separate global `texty[]`
+      table) is unsupported and undecoded — no currently-loadable map uses
+      it. `A_DISPLAY_TEXT` itself remains an unconsumed do_action case
+      (already noted in `actions.ts`'s own header comment) since real data
+      confirms no map currently exercises it.
+    - Verified live: unit tests cover the parser (byte-exact `TMA_TEXT`
+      layout, `MC_PASSSUC` vs `MC_TOUCHSUC` gating) and the `.ENC` decode
+      (cipher, diacritics, comments/blank lines, `|` newlines) against
+      both synthetic fixtures and the real `LESPRED.ENC`/`SKRETI.ENC`
+      files directly. End-to-end display was verified against a
+      byte-identical *copy* of the real `LESPRED.MAP` with one
+      `MA_TEXTL`/`MC_PASSSUC` instruction spliced into an already-real,
+      already-reachable passable side (Playwright's `page.route()`
+      intercepted just the one file fetch — the real `data/maps/
+      LESPRED.MAP` on disk was never touched), reusing `LESPRED.ENC`'s
+      real entry 1 text: walking through that side shows "Tvé
+      dobrodružství začalo ve Fregharově obydlí..." correctly rendered
+      (proper diacritics) in the bottom status bar. The two real, live
+      `MC_PASSSUC` triggers in `SKRETI.MAP` (sectors 327/417) sit behind
+      interactive doors past the same ~24-state static-reachability limit
+      Phase D3 already ran into — not independently walked to, but the
+      identical code path the spliced-fixture test exercises.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -937,7 +1033,7 @@ parity vs C build where applicable). Updated as issues close.
 | `inv.c` | items, inventory, stats, shops | `src/game/items.ts` | pending (floor-item rendering split out already — see `draw_placed_items_normal`/Phase D1 note below; inventory UI/equip/shops still pending) |
 | `dialogy.c` | dialog bytecode interpreter + UI | `src/game/dialogs.ts` | pending |
 | `gamesave.c` | save/load archive | `src/game/savegame.ts` | pending |
-| `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending (one opcode, `MA_LOADL`/map transitions, split out early — see `formats/map-file.ts`'s `parseMapTransitions`/Phase D3 note; the general ~40-opcode VM is still unported) |
+| `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending (two opcodes split out early — `MA_LOADL`/map transitions, `MA_TEXTL`/`MC_PASSSUC` level text — see `formats/map-file.ts`'s `parseMapMacros`/Phase D3-D4 notes; the general ~40-opcode VM is still unported) |
 | `specproc.c` | hardcoded special map procedures | `src/game/specproc.ts` | pending |
 | `engine1.c` | pseudo-3D zoom renderer | `src/game/dungeon-view.ts` (simplified — see note below) | in-progress, see note below |
 | `engine2.c` | blitters (walls, floors, sprites, anims) | `src/game/dungeon-view.ts` (simplified — see note below) | in-progress, see note below |
@@ -945,7 +1041,7 @@ parity vs C build where applicable). Updated as issues close.
 | `automap.c` | automap screen, notes | `src/game/automap.ts` | pending |
 | `globmap.c` | overworld travel map (GLOBMAP.DAT DSL) | `src/game/worldmap.ts` | pending |
 | `kniha.c` | story book renderer | `src/game/book.ts` | pending |
-| `interfac.c` | GUI widgets, message boxes, BFS pathfinder | `src/gui/interfac.ts` | pending |
+| `interfac.c` | GUI widgets, message boxes, BFS pathfinder | `src/gui/interfac.ts` | pending (its `enc_open`/`load_string_list_ex` — the `.ENC` level-text format — split out early into `src/formats/enc-file.ts`, see Phase D4 note; everything else in this file still pending) |
 | `clk_map.c` | mouse click-region dispatch (`T_CLK_MAP` + per-pixel PCX mask) | `src/gui/hotspot-mask.ts` | ported (menu/chargen consumers only — see Phase C note) |
 | `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (real MENUVOL5.PCX hit-testing ported; art/animation still placeholder) |
 | `setup.c` | settings screens | `src/gui/settings.ts` | pending |
@@ -979,7 +1075,7 @@ parity vs C build where applicable). Updated as issues close.
 | `mgifplaya.c` | MGIF playback + audio sync | `src/codecs/mgif.ts` | pending |
 | `wav_mem.c` | WAV loading | `src/codecs/wav.ts` | pending |
 | `music.cpp` | MUS music playback | `src/audio/music.ts` | pending |
-| `cztable.c` | Kamenický encoding tables | `src/io/kamenicky.ts` | pending |
+| `cztable.c` | Kamenický encoding tables | `src/formats/enc-file.ts` | ported (the 36-entry diacritic remap only, into Windows-1250 + a standard `TextDecoder` — see Phase D4 note; `windows2kamenik`'s reverse direction, used for storybook/name-input round-tripping, not ported) |
 | `strlite.c` | string helpers | `src/io/strings.ts` | pending |
 | `string_table.cpp` | string table container | `src/io/string-table.ts` | pending |
 | `file_to_base64.cpp` | build tool | not ported (build-time only) | excluded |

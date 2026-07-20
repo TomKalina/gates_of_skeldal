@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, sideAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, sideAt, textTriggerAt, toggleDoor, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -80,6 +80,19 @@ function loadlevInstruction(flags: number, startSector: number, startDirection: 
   view.setInt16(3, startSector, true);
   payload[5] = startDirection;
   payload.set(nameBytes, 6);
+  return payload;
+}
+
+// game/macros.c's tma_text on-disk layout: byte0=action(MA_TEXTL=3),
+// bytes1-2=flags (u16 LE), byte3=pflags (unused here), bytes4-7=textindex
+// (i32 LE) — a 4-byte header, unlike tma_loadlev's 3, verified against real
+// map data (every real instance is exactly 8 bytes).
+function textlInstruction(flags: number, textIndex: number): Uint8Array {
+  const payload = new Uint8Array(8);
+  const view = new DataView(payload.buffer);
+  payload[0] = 3; // MA_TEXTL
+  view.setUint16(1, flags, true);
+  view.setInt32(4, textIndex, true);
   return payload;
 }
 
@@ -236,6 +249,31 @@ describe('parseMapFile', () => {
     expect(mapTransitionAt(map, 6, 0)).toBeUndefined();
   });
 
+  it('parses A_MAPMACR MA_TEXTL/MC_PASSSUC instructions as level-text triggers, alongside MA_LOADL in the same pass', () => {
+    const MC_PASSSUC = 0x1;
+    const MC_TOUCHSUC = 0x4;
+    const buffer = new Uint8Array([
+      ...block(0x800a, mapGlobalPayload(0, 0, 'Test Map')),
+      ...block(0x8002, sectorPayload(1, 1, [0, 0, 0, 0])),
+      ...block(
+        0x800d,
+        new Uint8Array(
+          macroBlockPayload([
+            { sector: 8, direction: 2, instructions: [textlInstruction(MC_PASSSUC, 4)] },
+            // MA_TEXTL present but touch-gated, not walk-through-gated —
+            // this port doesn't hook wall-clicking yet (see map-file.ts's
+            // own comment), so this must not be extracted.
+            { sector: 9, direction: 0, instructions: [textlInstruction(MC_TOUCHSUC, 1)] },
+          ]),
+        ),
+      ),
+      ...block(0x8000, new Uint8Array(0)),
+    ]).buffer;
+    const map = parseMapFile(buffer);
+    expect(textTriggerAt(map, 8, 2)).toBe(4);
+    expect(textTriggerAt(map, 9, 0)).toBeUndefined();
+  });
+
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
     expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
@@ -307,6 +345,7 @@ describe('toggleDoor', () => {
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
     mapTransitions: new Map(),
+    textTriggers: new Map(),
     };
   }
 
@@ -367,6 +406,7 @@ describe('toggleDoor', () => {
     fadeColor: { r: 0, g: 0, b: 0 },
     placedItems: new Map(),
     mapTransitions: new Map(),
+    textTriggers: new Map(),
     };
 
     toggleDoor(map, 0, 1);
