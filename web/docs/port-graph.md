@@ -15,6 +15,19 @@ parity vs C build where applicable). Updated as issues close.
   (`libs/event.c`, `platform/legacy_coroutines.cpp`); TS equivalent is issue #7.
 - ~120 extern mutable globals in `game/globals.h` carry game state; the TS port
   consolidates them into explicit state objects (issue #11).
+- Early vertical slice (`src/game/main-menu.ts`) jumps ahead of strict issue
+  order to get a click/keyboard-navigable main menu on screen before the real
+  platform kernel (#7) and graphics lib (#8) exist. It uses a plain Canvas2D
+  context and a hardcoded 5-way band split standing in for the real per-pixel
+  `MENUVOL5.PCX` hotspot mask. Real `MAINMENU.PCX`/`LOGO00.PCX` art is decoded
+  and drawn (via `src/formats/ddl-archive.ts` + `src/codecs/pcx.ts`). In dev,
+  `vite.config.ts` serves the developer's own `data/SKELDAL.DDL` at
+  `/dev-data/SKELDAL.DDL` (dev server only, never bundled into a build) and
+  `main.ts` auto-fetches it on load — no click needed. Falls back to a plain
+  `<input type=file>` prompt (`src/platform/asset-source.ts`) when that route
+  404s, which is also the only path in a real deployment until the real
+  OPFS-backed intake screen (#2) lands. Replace the band-split hit-test and
+  the fallback file picker when #2/#8 land.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -38,7 +51,7 @@ parity vs C build where applicable). Updated as issues close.
 | `kniha.c` | story book renderer | `src/game/book.ts` | pending |
 | `interfac.c` | GUI widgets, message boxes, BFS pathfinder | `src/gui/interfac.ts` | pending |
 | `clk_map.c` | mouse click-region dispatch | `src/game/clickmap.ts` | pending |
-| `menu.c` | main menu | `src/gui/mainmenu.ts` | pending |
+| `menu.c` | main menu | `src/game/main-menu.ts` | in-progress (placeholder slice, no assets/animation) |
 | `setup.c` | settings screens | `src/gui/settings.ts` | pending |
 | `chargen.c` | character generation | `src/game/chargen.ts` | pending |
 | `sndandmus.c` | game-side sound/music control | `src/audio/game-audio.ts` | pending |
@@ -64,7 +77,7 @@ parity vs C build where applicable). Updated as issues close.
 | `gui.c` | GUI object core | `src/gui/core.ts` | pending |
 | `basicobj.c` | basic GUI widgets | `src/gui/basicobj.ts` | pending |
 | `inicfg.c` | INI config parser | `src/io/ini.ts` | pending |
-| `pcx.c` | PCX-family image decoder | `src/codecs/pcx.ts` | pending |
+| `pcx.c` | PCX-family image decoder | `src/codecs/pcx.ts` | ported (RLE + palette decode; validated pixel-for-pixel against real `MAINMENU.PCX`/`LOGO00.PCX` via a throwaway script, see #4/#5) |
 | `mgifmem.c` | MGIF video decoder (memory) | `src/codecs/mgif.ts` | pending |
 | `mgifmapmem.c` | MGIF mapped-memory variant | `src/codecs/mgif.ts` | pending |
 | `mgifplaya.c` | MGIF playback + audio sync | `src/codecs/mgif.ts` | pending |
@@ -74,6 +87,15 @@ parity vs C build where applicable). Updated as issues close.
 | `strlite.c` | string helpers | `src/io/strings.ts` | pending |
 | `string_table.cpp` | string table container | `src/io/string-table.ts` | pending |
 | `file_to_base64.cpp` | build tool | not ported (build-time only) | excluded |
+
+## Archive format (reference: `tools/ddl_ar_class.cpp`, issue #4)
+
+Not part of `skeldal_libs`/`skeldal_main` — `tools/ddl_ar.cpp`/`ddl_ar_class.cpp` is
+the standalone CLI that packs/reads the `.DDL` archive `skeldal.ini`'s
+`[paths] data` entry points at. Ported to `src/formats/ddl-archive.ts`
+(status: **ported**, unit-tested against a synthetic fixture and manually
+validated byte-for-byte against the real `data/SKELDAL.DDL` on a dev machine —
+2482 files, correct offsets for every entry probed).
 
 ## platform/ (targets `skeldal_platform` + `skeldal_sdl`, issues #2, #7, #12)
 

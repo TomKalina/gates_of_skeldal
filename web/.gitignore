@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
 
 # Copyrighted game assets and fixtures derived from them — NEVER commit.
 # Only hash manifests of fixtures are committed (see docs in #3).
