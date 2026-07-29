@@ -1,4 +1,5 @@
 import { MENU_ITEMS, MENU_RECT, hitTestMenu, navigateMenu, type MenuChoice } from '../gui/menu-nav';
+import { clientToCanvasPoint } from '../platform/canvas-transform';
 
 export interface MainMenuAssets {
   background?: ImageData;
@@ -66,22 +67,6 @@ export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAsset
     resolveChoice(index);
   }
 
-  // The canvas is displayed via CSS object-fit: contain, so its layout box
-  // (getBoundingClientRect) is generally larger than the letterboxed content
-  // it actually draws into — invert that scale-and-center transform here.
-  function toCanvasPoint(e: MouseEvent): { x: number; y: number } {
-    const rect = canvas.getBoundingClientRect();
-    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
-    const displayWidth = canvas.width * scale;
-    const displayHeight = canvas.height * scale;
-    const offsetX = rect.left + (rect.width - displayWidth) / 2;
-    const offsetY = rect.top + (rect.height - displayHeight) / 2;
-    return {
-      x: (e.clientX - offsetX) / scale,
-      y: (e.clientY - offsetY) / scale,
-    };
-  }
-
   function onKeydown(e: KeyboardEvent): void {
     switch (e.code) {
       case 'ArrowUp':
@@ -103,13 +88,13 @@ export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAsset
   }
 
   function onClick(e: MouseEvent): void {
-    const { x, y } = toCanvasPoint(e);
+    const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
     const hit = hitTestMenu(x, y);
     if (hit !== null) pick(hit);
   }
 
   function onMove(e: MouseEvent): void {
-    const { x, y } = toCanvasPoint(e);
+    const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
     const hit = hitTestMenu(x, y);
     if (hit !== null && hit !== selected) {
       selected = hit;

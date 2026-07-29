@@ -33,7 +33,16 @@ function decompressLine(src: Uint8Array, srcPos: number, outLen: number): { row:
   return { row, bytesConsumed: pos - srcPos };
 }
 
-export function decodePcx(data: Uint8Array): PcxImage {
+export interface DecodePcxOptions {
+  // Sprite assets (e.g. the character-generator body sprites) use a solid
+  // palette index — verified as index 0 against the real CHAR*.PCX files —
+  // as a colorkey background that the original blitter skips. Plain
+  // background/UI art has no such convention, so this is opt-in per call
+  // site rather than a global default.
+  transparentIndex?: number;
+}
+
+export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): PcxImage {
   if (data.length < HEADER_SIZE + PALETTE_SIZE) {
     throw new Error('PCX: data too small to contain a header and palette');
   }
@@ -55,8 +64,13 @@ export function decodePcx(data: Uint8Array): PcxImage {
     const { row, bytesConsumed } = decompressLine(data, srcPos, bytesPerLine);
     srcPos += bytesConsumed;
     for (let x = 0; x < width; x++) {
-      const index = (row[x] ?? 0) * 3;
+      const paletteIndex = row[x] ?? 0;
       const out = (y * width + x) * 4;
+      if (paletteIndex === options.transparentIndex) {
+        rgba[out + 3] = 0;
+        continue;
+      }
+      const index = paletteIndex * 3;
       rgba[out] = palette[index] ?? 0;
       rgba[out + 1] = palette[index + 1] ?? 0;
       rgba[out + 2] = palette[index + 2] ?? 0;
