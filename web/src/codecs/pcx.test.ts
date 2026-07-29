@@ -51,4 +51,15 @@ describe('decodePcx', () => {
     expect(alpha(0, 1)).toBe(255);
     expect(alpha(1, 1)).toBe(255);
   });
+
+  it('leaves every pixel opaque when transparentIndex is not present in the image', () => {
+    // The whole point of always passing a fixed transparentIndex for a known
+    // asset category: if this particular image doesn't use that index, no
+    // pixel matches it, so nothing gets punched out.
+    const image = decodePcx(buildPcx(), { transparentIndex: 99 });
+    const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
+    expect(alpha(0, 0)).toBe(255);
+    expect(alpha(0, 1)).toBe(255);
+    expect(alpha(1, 1)).toBe(255);
+  });
 });

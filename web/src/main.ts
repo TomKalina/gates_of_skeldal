@@ -2,9 +2,14 @@ import { createScreenCanvas } from './platform/canvas-context';
 import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
 import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
+import { runDungeonView, type DungeonTextureSet } from './game/dungeon-view';
+import type { Direction } from './game/dungeon';
 import { MENU_ITEMS } from './gui/menu-nav';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
+import { parseMapFile, type DungeonMap } from './formats/map-file';
 import { decodePcx, pcxToImageData } from './codecs/pcx';
+
+const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
 
 function getAppRoot(): HTMLElement {
   const el = document.getElementById('app');
@@ -20,6 +25,20 @@ const app = getAppRoot();
 async function tryAutoLoadDDL(): Promise<ArrayBuffer | null> {
   try {
     const res = await fetch('/dev-data/SKELDAL.DDL');
+    if (!res.ok) return null;
+    return await res.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+// Same dev-only convenience for the starting map — .MAP files live loose
+// under data/maps/, not inside SKELDAL.DDL. No production fallback yet (the
+// real OPFS-backed intake in #2 will cover maps too); if this 404s we just
+// don't offer to enter the dungeon.
+async function tryAutoLoadMap(name: string): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(`/dev-data/maps/${name}`);
     if (!res.ok) return null;
     return await res.arrayBuffer();
   } catch {
@@ -88,6 +107,38 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   return assets;
 }
 
+// TSECTOR.floor/ceil and TSTENA.prim are 1-based indices into the map's own
+// embedded filename list (realgame.c: prepare_graphics); 0 means "none".
+function loadTextureSet(
+  archive: DDLArchive,
+  names: readonly string[],
+  transparentIndex?: number,
+): ReadonlyMap<number, ImageData> {
+  const textures = new Map<number, ImageData>();
+  names.forEach((name, i) => {
+    const raw = archive.extract(name);
+    if (raw) textures.set(i + 1, pcxToImageData(decodePcx(raw, transparentIndex !== undefined ? { transparentIndex } : {})));
+  });
+  return textures;
+}
+
+// Wall/decoration textures (main + side sets) reserve palette index 1 as a
+// colorkey background — verified across 102 real textures in LESPRED.MAP:
+// index 1's share is either exactly 0% (unused, full-bleed art) or >11%
+// (clearly the reserved background), never in between. Floor/ceiling strips
+// don't use this convention (confirmed full-bleed).
+const WALL_TRANSPARENT_INDEX = 1;
+
+function loadDungeonTextures(archive: DDLArchive, map: DungeonMap): DungeonTextureSet {
+  return {
+    main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX),
+    left: loadTextureSet(archive, map.leftTextures, WALL_TRANSPARENT_INDEX),
+    right: loadTextureSet(archive, map.rightTextures, WALL_TRANSPARENT_INDEX),
+    floor: loadTextureSet(archive, map.floorTextures),
+    ceil: loadTextureSet(archive, map.ceilTextures),
+  };
+}
+
 function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -95,6 +146,20 @@ function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
   ctx.font = '20px monospace';
   ctx.textBaseline = 'middle';
   ctx.fillText(message, 40, ctx.canvas.height / 2);
+}
+
+async function enterDungeon(ctx: CanvasRenderingContext2D, archive: DDLArchive): Promise<boolean> {
+  const mapBuffer = await tryAutoLoadMap(START_MAP);
+  if (!mapBuffer) return false;
+
+  const map = parseMapFile(mapBuffer);
+  const textures = loadDungeonTextures(archive, map);
+  runDungeonView(
+    ctx,
+    { map, sector: map.startSector, direction: map.startDirection as Direction },
+    textures,
+  );
+  return true;
 }
 
 async function boot(): Promise<void> {
@@ -111,8 +176,9 @@ async function boot(): Promise<void> {
       const { result } = runCharacterCreation(ctx, chargenAssets);
       const party = await result;
       if (party) {
+        if (await enterDungeon(ctx, archive)) return; // dungeon view has no exit yet
         const names = party.map((member) => member.name).join(', ');
-        showPlaceholder(ctx, `Party created: ${names} — dungeon not implemented yet`);
+        showPlaceholder(ctx, `Party created: ${names} — dungeon map unavailable`);
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
       continue;

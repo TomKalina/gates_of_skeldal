@@ -51,13 +51,75 @@ parity vs C build where applicable). Updated as issues close.
     the real `CHAR00.PCX`: index 0 is pure blue `(0,0,255)` and ~61% of pixels)
     — `decodePcx()` takes an opt-in `transparentIndex` option for this since
     plain background art has no such convention.
+- First dungeon view (`src/formats/map-file.ts`, `src/game/dungeon.ts`,
+  `src/game/dungeon-view.ts`): parses the real `.MAP` binary format (block
+  container: `<BLOCK>\0` + int32 type + int32 size + ignored int32 + payload,
+  terminated by `A_MAPEND`) and renders a first-person view from the parsed
+  `TSECTOR`/`TSTENA` grid, with arrow-key turn/move. Real, meaningful
+  simplifications from `engine1.c`/`engine2.c`/`builder.c`:
+  - The original's "zoom tables" are a precomputed axis-aligned scaled-rect
+    blit per depth/column (confirmed by reading `calc_points`/`create_tables`
+    and the `sikma_*` blitters) — **not** raycasting — so `computeViewCells` +
+    a geometric per-depth scale factor (`DEPTH_SCALE`) into `drawImage` is a
+    structurally faithful port of the technique, just without the exact DOS
+    pixel-stride tables.
+  - Every surface uses its real decoded texture (not a flat average color —
+    an earlier version of this file oversimplified here after too shallow a
+    read of `engine1.c`). Front wall: `drawImage` into the depth-scaled rect,
+    same as `show_cel2`. Side walls: a `ctx.clip()` trapezoid (matching the
+    shape `show_cel`'s `yss`/`ysd` skew produces) with the real texture
+    `drawImage`-stretched into its bounding box.
+  - Floor/ceiling: **not** depth-banded (an earlier version of this file
+    sliced the texture into per-depth strips, on the assumption it was a
+    tall perspective-encoded strip — wrong; decoding and looking at the real
+    art, e.g. `LES1C01A.PCX`, showed a small *repeating* tile pattern, not a
+    depth gradient). Now just the nearest cell's whole floor/ceiling texture
+    stretched once over its entire screen region — simpler and correct for
+    a repeating pattern. A faithful port of `fcdraw`'s true per-scanline
+    `T_FLOOR_MAP`/`T_CEIL_MAP` tables (which do vary the source per row) is
+    future work, and would also need to blend across cells with different
+    floor/ceiling textures at different depths, which this doesn't.
+  - Wall/decoration textures (main + side sets) reserve **palette index 1**
+    as a colorkey-transparent background — confirmed with a pixel-count
+    survey across all 102 real wall textures in `LESPRED.MAP`: index 1's
+    share is either exactly 0% (unused, full-bleed art) or >11% (clearly a
+    reserved background fill), never in between, so `decodePcx(...,
+    {transparentIndex: 1})` is always safe to apply to these sets — no
+    per-image heuristic needed. (Two earlier, more complicated attempts —
+    "use the corner pixel's index", "use whichever index is globally most
+    frequent" — both broke on real textures: the corner pixel isn't always
+    background, e.g. `LES1W11B.PCX`; and full-bleed art can have an
+    unrelated color be its single most frequent index at a similar or higher
+    percentage than a real colorkey background, e.g. `LES1W01A.PCX`'s
+    dominant shadow color at 23.8%. A texture-category-specific fixed index,
+    verified against a large real sample, was more robust than any
+    per-image inference.) This is a *different* index from the character
+    sprites' colorkey (index 0) — the reserved slot is a per-asset-category
+    convention, not a single global constant.
+  - View-stopping uses `SD_PRIM_VIS` (is a wall texture rendered here) as a
+    simple "opaque wall" test; the original also has door/arch/see-through
+    nuance (`SD_LEFT_ARC`/`SD_RIGHT_ARC`, double-sided walls) this doesn't
+    model. Movement passability correctly uses the *different* flag
+    `SD_PLAY_IMPS` — verified against real map data that these two flags
+    disagree on some sides (e.g. a side can render a wall image while still
+    being non-blocking, or vice versa).
+  - No smooth step/turn animation (`step_zoom`/`turn_zoom` in `realgame.c`) —
+    moves and turns are instant. No items/mobs/niches/macros; those blocks
+    are parsed only far enough to skip past in the file (`A_MAPITEM`,
+    `A_MOBS`, `A_MAPMACR`, `A_MAPVYK`, `A_PASSW` are read but discarded).
+  - The default starting map is `LESPRED.MAP` (`skeldal.c`'s `default_map`),
+    not `SKELDAL.MAP` — verified from `new_game()`'s fallback path. `.MAP`
+    files live loose under `data/maps/`, not inside `SKELDAL.DDL`; the same
+    dev-only Vite route pattern as the DDL now also serves an allowlisted set
+    of map files (`vite.config.ts`'s `ALLOWED_DEV_MAPS`) — no production
+    fallback yet, that's part of the real asset-intake screen (#2).
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
 | C source | Purpose | Planned TS home | Status |
 | --- | --- | --- | --- |
 | `skeldal.c` | app spine, config, resource registry, main loop | `src/game/main.ts` | pending |
-| `realgame.c` | map state, per-tick update, actions, movement | `src/game/realgame.ts` | pending |
+| `realgame.c` | map state, per-tick update, actions, movement | `src/formats/map-file.ts` (`.MAP` parsing only — see note below), `src/game/dungeon.ts` (movement/view-cell logic) | in-progress, see note below |
 | `souboje.c` | turn-based combat | `src/game/combat.ts` | pending |
 | `enemy.c` | mob AI, pathing, sprite rendering | `src/game/mobs.ts` | pending |
 | `kouzla.c` | spell system | `src/game/spells.ts` | pending |
@@ -66,9 +128,9 @@ parity vs C build where applicable). Updated as issues close.
 | `gamesave.c` | save/load archive | `src/game/savegame.ts` | pending |
 | `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending |
 | `specproc.c` | hardcoded special map procedures | `src/game/specproc.ts` | pending |
-| `engine1.c` | pseudo-3D zoom renderer | `src/engine/engine1.ts` | pending |
-| `engine2.c` | blitters (walls, floors, sprites, anims) | `src/engine/blitters.ts` | pending |
-| `builder.c` | scene composition, minimap, bottom bar | `src/engine/scene.ts` | pending |
+| `engine1.c` | pseudo-3D zoom renderer | `src/game/dungeon-view.ts` (simplified — see note below) | in-progress, see note below |
+| `engine2.c` | blitters (walls, floors, sprites, anims) | `src/game/dungeon-view.ts` (simplified — see note below) | in-progress, see note below |
+| `builder.c` | scene composition, minimap, bottom bar | `src/game/dungeon.ts` (view-cell traversal only) | in-progress, see note below |
 | `automap.c` | automap screen, notes | `src/game/automap.ts` | pending |
 | `globmap.c` | overworld travel map (GLOBMAP.DAT DSL) | `src/game/worldmap.ts` | pending |
 | `kniha.c` | story book renderer | `src/game/book.ts` | pending |

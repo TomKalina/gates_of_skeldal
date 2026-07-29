@@ -34,11 +34,17 @@ function decompressLine(src: Uint8Array, srcPos: number, outLen: number): { row:
 }
 
 export interface DecodePcxOptions {
-  // Sprite assets (e.g. the character-generator body sprites) use a solid
-  // palette index — verified as index 0 against the real CHAR*.PCX files —
-  // as a colorkey background that the original blitter skips. Plain
-  // background/UI art has no such convention, so this is opt-in per call
-  // site rather than a global default.
+  // Sprite/wall-decoration assets use a reserved palette index as a colorkey
+  // background that the original blitter skips; plain full-bleed background
+  // art has no such convention, so this is opt-in per call site. The index
+  // isn't a single constant across asset types — verified index 0 for
+  // CHAR*.PCX body sprites, index 1 for map wall/decoration textures (both
+  // main and side sets) via a direct pixel-count survey: across 102 real
+  // wall textures, index 1's share was either exactly 0% (never used —
+  // full-bleed art) or >11% (clearly the reserved background), with no
+  // textures in between. So it's safe to always pass the asset type's
+  // known index; when a given image doesn't use it, nothing gets punched
+  // out, since no pixel matches.
   transparentIndex?: number;
 }
 
@@ -70,10 +76,10 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
         rgba[out + 3] = 0;
         continue;
       }
-      const index = paletteIndex * 3;
-      rgba[out] = palette[index] ?? 0;
-      rgba[out + 1] = palette[index + 1] ?? 0;
-      rgba[out + 2] = palette[index + 2] ?? 0;
+      const p = paletteIndex * 3;
+      rgba[out] = palette[p] ?? 0;
+      rgba[out + 1] = palette[p + 1] ?? 0;
+      rgba[out + 2] = palette[p + 2] ?? 0;
       rgba[out + 3] = 255;
     }
   }

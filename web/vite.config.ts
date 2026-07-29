@@ -8,6 +8,9 @@ import { defineConfig } from 'vitest/config';
 // being bundled or committed. `apply: 'serve'` means this plugin never runs
 // for `vite build` — it has no effect on the production bundle.
 const ALLOWED_DEV_ASSETS = new Set(['SKELDAL.DDL']);
+// .MAP files live loose under data/maps/ (skeldal.ini's separate `maps` path),
+// not inside SKELDAL.DDL — allowlisted individually as new maps are needed.
+const ALLOWED_DEV_MAPS = new Set(['LESPRED.MAP']);
 
 function serveLocalGameData(): Plugin {
   return {
@@ -15,12 +18,19 @@ function serveLocalGameData(): Plugin {
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use('/dev-data', (req, res, next) => {
-        const name = decodeURIComponent((req.url ?? '').replace(/^\//, ''));
-        if (!ALLOWED_DEV_ASSETS.has(name)) {
+        const reqPath = decodeURIComponent((req.url ?? '').replace(/^\//, ''));
+        const mapsMatch = /^maps\/([^/]+)$/.exec(reqPath);
+
+        let filePath: string;
+        if (ALLOWED_DEV_ASSETS.has(reqPath)) {
+          filePath = path.resolve(import.meta.dirname, '..', 'data', reqPath);
+        } else if (mapsMatch && ALLOWED_DEV_MAPS.has(mapsMatch[1]!)) {
+          filePath = path.resolve(import.meta.dirname, '..', 'data', 'maps', mapsMatch[1]!);
+        } else {
           next();
           return;
         }
-        const filePath = path.resolve(import.meta.dirname, '..', 'data', name);
+
         readFile(filePath)
           .then((data) => {
             res.setHeader('Content-Type', 'application/octet-stream');
