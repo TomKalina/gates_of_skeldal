@@ -11,3 +11,7 @@ fixtures/
 *.DAT
 *.ENC
 *.MUS
+
+# Reference screenshots of the real game, kept locally for pixel comparison
+# during porting — never commit (real game's copyrighted art/UI).
+docs/reference/

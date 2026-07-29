@@ -42,6 +42,15 @@ describe('decodePcx', () => {
     expect(pixel(1, 1)).toEqual([70, 80, 90, 255]);
   });
 
+  it('exposes the raw per-pixel palette index alongside rgba, regardless of transparentIndex', () => {
+    // "Hotspot mask" assets (MENUVOL5.PCX, CHARGENM.PCX) reserve this raw
+    // byte as a button-ID lookup, not real pixel color — see
+    // gui/hotspot-mask.ts. Decoded with no transparentIndex here to prove
+    // the index array doesn't depend on that option at all.
+    const image = decodePcx(buildPcx());
+    expect([...image.indices]).toEqual([1, 1, 2, 3]);
+  });
+
   it('zeroes alpha for the given transparentIndex, leaving other pixels opaque', () => {
     const image = decodePcx(buildPcx(), { transparentIndex: 1 });
     const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
@@ -50,6 +59,19 @@ describe('decodePcx', () => {
     expect(alpha(1, 0)).toBe(0);
     expect(alpha(0, 1)).toBe(255);
     expect(alpha(1, 1)).toBe(255);
+  });
+
+  it('zeroes alpha for every index in an array of transparentIndex values', () => {
+    // Niche prop textures (e.g. LES1A23A.PCX, a table) reserve two separate
+    // colorkey indices at once — one is the usual wall/decoration colorkey,
+    // the other is a distinct, separately-painted background color.
+    const image = decodePcx(buildPcx(), { transparentIndex: [1, 2] });
+    const alpha = (x: number, y: number) => image.rgba[(y * image.width + x) * 4 + 3];
+
+    expect(alpha(0, 0)).toBe(0); // index 1
+    expect(alpha(1, 0)).toBe(0); // index 1
+    expect(alpha(0, 1)).toBe(0); // index 2
+    expect(alpha(1, 1)).toBe(255); // index 3, untouched
   });
 
   it('leaves every pixel opaque when transparentIndex is not present in the image', () => {

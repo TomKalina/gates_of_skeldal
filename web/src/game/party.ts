@@ -89,6 +89,22 @@ export function validateCharacterName(name: string): boolean {
   return name.trim().length > 0;
 }
 
+export type PrimaryStat = 'strength' | 'magic' | 'speed' | 'dexterity';
+
+// The reference stat-review screen shows "Bonus: 5" alongside a [+] next to
+// each of the 4 primary stats — points the player allocates immediately
+// during character creation (not saved for later level-ups). Spending one
+// recomputes derived HP/mana/stamina the same way generuj_postavu does,
+// since they're a function of the primary stats.
+export function spendBonusPoint(character: Character, stat: PrimaryStat): Character {
+  if (character.bonusPoints <= 0) return character;
+  const stats: RolledStats = { ...character.stats, [stat]: character.stats[stat] + 1 };
+  stats.maxHp = Math.floor((stats.strength * 3 + stats.speed) / 2);
+  stats.maxMana = stats.magic * 2;
+  stats.stamina = stats.dexterity * 2;
+  return { ...character, stats, bonusPoints: character.bonusPoints - 1 };
+}
+
 export type PartyRoster = readonly (Character | null)[];
 
 export function createEmptyRoster(): PartyRoster {

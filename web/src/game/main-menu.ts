@@ -1,9 +1,14 @@
-import { MENU_ITEMS, MENU_RECT, hitTestMenu, navigateMenu, type MenuChoice } from '../gui/menu-nav';
+import { MENU_ITEMS, MENU_RECT, hitTestMenu, hitTestMenuBands, navigateMenu, type MenuChoice } from '../gui/menu-nav';
+import type { HotspotMask } from '../gui/hotspot-mask';
 import { clientToCanvasPoint } from '../platform/canvas-transform';
 
 export interface MainMenuAssets {
   background?: ImageData;
   logo?: { image: ImageData; y: number };
+  // MENUVOL5.PCX's raw palette-index data (see gui/hotspot-mask.ts) — the
+  // real per-pixel button hit-test. Falls back to hitTestMenuBands' equal-
+  // band approximation if this fails to load.
+  hotspotMask?: HotspotMask;
 }
 
 export interface MainMenuHandle {
@@ -15,8 +20,9 @@ export interface MainMenuHandle {
 // resolves once a choice is made (mouse click, Enter/Space, or Escape = Quit,
 // mirroring E_QUIT_GAME_KEY in klavesnice()). When real MAINMENU.PCX/LOGO00.PCX
 // art is supplied it's drawn as-is (the button labels are baked into the art);
-// otherwise falls back to a plain text menu. Button hit-testing is a hardcoded
-// 5-way band split standing in for the real per-pixel MENUVOL5.PCX mask.
+// otherwise falls back to a plain text menu. Button hit-testing uses the real
+// per-pixel MENUVOL5.PCX mask (see gui/hotspot-mask.ts), falling back to an
+// equal 5-way band split only if that asset fails to load.
 export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAssets = {}): MainMenuHandle {
   const canvas = ctx.canvas;
   let selected: MenuChoice = 0;
@@ -87,15 +93,19 @@ export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAsset
     }
   }
 
+  function hitTest(x: number, y: number): MenuChoice | null {
+    return assets.hotspotMask ? hitTestMenu(assets.hotspotMask, x, y) : hitTestMenuBands(x, y);
+  }
+
   function onClick(e: MouseEvent): void {
     const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
-    const hit = hitTestMenu(x, y);
+    const hit = hitTest(x, y);
     if (hit !== null) pick(hit);
   }
 
   function onMove(e: MouseEvent): void {
     const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
-    const hit = hitTestMenu(x, y);
+    const hit = hitTest(x, y);
     if (hit !== null && hit !== selected) {
       selected = hit;
       draw();

@@ -7,6 +7,16 @@ export interface PcxImage {
   width: number;
   height: number;
   rgba: Uint8ClampedArray<ArrayBuffer>;
+  // Raw per-pixel palette index (row-major, before any RGB/transparency
+  // lookup) — always populated, since decoding it is already a byproduct
+  // of building `rgba`. This is the exact byte a handful of real "hotspot
+  // mask" assets (MENUVOL5.PCX, CHARGENM.PCX) reserve as a hit-test/
+  // button-ID lookup table rather than real pixel color — see
+  // game/clk_map.c's promacknuti()/go_next_page(), which index into this
+  // same raw-index array (`ablock(mask)+6+512` in the real engine's
+  // in-memory layout) to find which button is under the cursor. Ordinary
+  // callers only need `rgba`; `gui/hotspot-mask.ts` is what reads this.
+  indices: Uint8Array;
 }
 
 const HEADER_SIZE = 128;
@@ -45,7 +55,14 @@ export interface DecodePcxOptions {
   // textures in between. So it's safe to always pass the asset type's
   // known index; when a given image doesn't use it, nothing gets punched
   // out, since no pixel matches.
-  transparentIndex?: number;
+  //
+  // A niche-flagged wall side's prop texture (see dungeon.ts's
+  // frontWallFlipped) reserves *two* indices for background — verified
+  // against LES1A23A.PCX (a table): index 1 is the usual wall/decoration
+  // colorkey (61% of pixels), but index 0 is a second, separately-painted
+  // "background" color (here, opaque red, 27% of pixels) that isn't real
+  // content either. Passing an array punches out all of them.
+  transparentIndex?: number | number[];
 }
 
 export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): PcxImage {
@@ -64,15 +81,25 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
   const paletteOffset = data.length - PALETTE_SIZE;
   const palette = data.subarray(paletteOffset, paletteOffset + PALETTE_SIZE);
 
+  const transparentIndices = new Set(
+    options.transparentIndex === undefined
+      ? []
+      : Array.isArray(options.transparentIndex)
+        ? options.transparentIndex
+        : [options.transparentIndex],
+  );
+
   const rgba = new Uint8ClampedArray(new ArrayBuffer(width * height * 4));
+  const indices = new Uint8Array(width * height);
   let srcPos = HEADER_SIZE;
   for (let y = 0; y < height; y++) {
     const { row, bytesConsumed } = decompressLine(data, srcPos, bytesPerLine);
     srcPos += bytesConsumed;
     for (let x = 0; x < width; x++) {
       const paletteIndex = row[x] ?? 0;
+      indices[y * width + x] = paletteIndex;
       const out = (y * width + x) * 4;
-      if (paletteIndex === options.transparentIndex) {
+      if (transparentIndices.has(paletteIndex)) {
         rgba[out + 3] = 0;
         continue;
       }
@@ -84,9 +111,59 @@ export function decodePcx(data: Uint8Array, options: DecodePcxOptions = {}): Pcx
     }
   }
 
-  return { width, height, rgba };
+  return { width, height, rgba, indices };
 }
 
 export function pcxToImageData(image: PcxImage): ImageData {
   return new ImageData(image.rgba, image.width, image.height);
+}
+
+// A subset of the game's wall/door/decoration PCX assets are authored
+// stored top-to-bottom flipped relative to the rest — see main.ts's
+// VERTICALLY_FLIPPED_TEXTURES for which ones and how that was determined
+// (no map-data flag or file-header field predicts it; verified per-file by
+// visual inspection). This is the mechanical flip they get baked through
+// once, at texture-load time.
+export function flipImageDataVertically(image: ImageData): ImageData {
+  const { width, height, data } = image;
+  const flipped = new Uint8ClampedArray(data.length);
+  const rowBytes = width * 4;
+  for (let y = 0; y < height; y++) {
+    const srcStart = y * rowBytes;
+    const dstStart = (height - 1 - y) * rowBytes;
+    flipped.set(data.subarray(srcStart, srcStart + rowBytes), dstStart);
+  }
+  return new ImageData(flipped, width, height);
+}
+
+// show_cel2's rev==2 branch (game/engine1.c) draws the OBL2_NUM arch-texture
+// bank by walking the *screen* write position backward (`639-x`) while
+// still walking the *source* pixmap forward — verified against the real
+// mirror investigation into show_cel/show_cel2 this session (the engine
+// never reverses source pixel order anywhere; every mirror it does is a
+// destination-write-direction flip). A source image authored with its
+// content anchored at one edge (e.g. LES1W06B/C.PCX's tree trunk on the
+// canvas's left edge) ends up appearing on the *opposite* screen edge when
+// blitted this way. Baking an ordinary horizontal pixel-flip into the
+// loaded ImageData once, at load time, reproduces that same visible
+// result without replicating the DOS-era reversed-write-direction blit
+// technique itself — same "port the result, not the technique" approach
+// used for the vertical flip above and for perspective.ts's floor/ceiling
+// geometry.
+export function flipImageDataHorizontally(image: ImageData): ImageData {
+  const { width, height, data } = image;
+  const flipped = new Uint8ClampedArray(data.length);
+  const rowBytes = width * 4;
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * rowBytes;
+    for (let x = 0; x < width; x++) {
+      const src = rowStart + x * 4;
+      const dst = rowStart + (width - 1 - x) * 4;
+      flipped[dst] = data[src]!;
+      flipped[dst + 1] = data[src + 1]!;
+      flipped[dst + 2] = data[src + 2]!;
+      flipped[dst + 3] = data[src + 3]!;
+    }
+  }
+  return new ImageData(flipped, width, height);
 }

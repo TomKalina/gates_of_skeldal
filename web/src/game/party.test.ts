@@ -8,6 +8,7 @@ import {
   MAX_PARTY_SIZE,
   partySize,
   rollCharacterStats,
+  spendBonusPoint,
   usedPortraits,
   validateCharacterName,
   withMember,
@@ -51,6 +52,28 @@ describe('isPortraitFemale', () => {
   it('matches chargen.c poradi[]/women[] tables — not a simple index threshold', () => {
     expect([0, 2, 3, 4].map(isPortraitFemale)).toEqual([false, false, false, false]);
     expect([1, 5, 6, 7].map(isPortraitFemale)).toEqual([true, true, true, true]);
+  });
+});
+
+describe('spendBonusPoint', () => {
+  it('increments the stat, decrements the pool, and recomputes derived values', () => {
+    const character = createCharacter('Hero', 0, RANGES, () => 0);
+    expect(character.bonusPoints).toBe(5);
+    expect(character.stats.strength).toBe(10);
+
+    const upgraded = spendBonusPoint(character, 'strength');
+    expect(upgraded.bonusPoints).toBe(4);
+    expect(upgraded.stats.strength).toBe(11);
+    expect(upgraded.stats.maxHp).toBe(Math.floor((11 * 3 + 8) / 2));
+  });
+
+  it('does nothing once the pool is empty', () => {
+    let character = createCharacter('Hero', 0, RANGES, () => 0);
+    for (let i = 0; i < 5; i++) character = spendBonusPoint(character, 'strength');
+    expect(character.bonusPoints).toBe(0);
+
+    const unchanged = spendBonusPoint(character, 'strength');
+    expect(unchanged).toBe(character);
   });
 });
 
