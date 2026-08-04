@@ -348,7 +348,14 @@ produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
 - **D1. Placed items** — **done for `A_MAPITEM`/`draw_placed_items_normal`**
   (2026-07-19); `A_MAPVYK`/`draw_vyklenek` (niche items) still pending, see
   port-graph.md's Phase D1 entry for the exact split and why.
-- **D2. Inventory screen** (`game/inv.c`) on the C-phase toolkit.
+- **D2. Inventory screen** (`game/inv.c`, 3279 lines — its own real click
+  mechanism, not the C-phase toolkit; see port-graph.md's Phase D2a note).
+  - **D2a — chrome + open/close — done** (2026-08-04): real screen layout
+    (paper-doll arch, backpack-grid background, info panel, character
+    name), `'I'` opens it from the dungeon view, `Escape` closes it. No
+    item is reachable yet (no pickup/chest/shop), so equip/unequip,
+    drag-and-drop, rings, arrows, and item combinations (`COMBITEM.DAT`)
+    are all real, deliberately deferred follow-up work.
 - **D3. Map switching** — **done for the in-world MA_LOADL/MC_PASSFAIL
   wall-transition case** (2026-07-19; see port-graph.md's Phase D3 entry).
   There's no separate `A_CHANGE_MAP` action family — map switches turn out

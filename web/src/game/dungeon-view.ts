@@ -1,5 +1,6 @@
 import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
+import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
 import { readSave, writeSave } from './save';
 import type { Character } from './party';
 import { faceThumbnail } from './portraits';
@@ -184,6 +185,7 @@ export function runDungeonView(
   chrome: DungeonChromeAssets = {},
   loadMap: MapLoader = () => Promise.resolve(null),
   initialLevelTexts: ReadonlyMap<number, string> = new Map(),
+  inventoryAssets: InventoryAssets = {},
 ): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
@@ -191,6 +193,11 @@ export function runDungeonView(
   let levelTexts = initialLevelTexts;
   let hoverDpad: DpadDirection | null = null;
   let statusText = '';
+  // game/inv.c's inventory/equipment screen (Phase D2a: chrome + open/close
+  // only, see inventory-view.ts's own header comment for what's deferred).
+  // Always shows the first party member — real inv.c switches via clicking
+  // the party portrait strip (`start_invetory`), not built yet.
+  let inventoryOpen = false;
 
   let resolveResult!: () => void;
   const result = new Promise<void>((resolve) => {
@@ -540,6 +547,11 @@ export function runDungeonView(
   }
 
   function draw(): void {
+    if (inventoryOpen) {
+      const character = party[0];
+      if (character) drawInventoryScreen(ctx, character, inventoryAssets);
+      return;
+    }
     // Sky-colored, not black: drawFloorCeilBase's single fallback split (see
     // its own comment) is derived from the *nearest* center-column cell, so
     // a farther no-ceiling cell newly exposed through an opened passage
@@ -594,6 +606,7 @@ export function runDungeonView(
   }
 
   function onMouseDown(e: MouseEvent): void {
+    if (inventoryOpen) return; // clicking a slot/ring/doll isn't wired yet — see inventory-view.ts
     const rect = canvas.getBoundingClientRect();
     const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
     const offX = rect.left + (rect.width - canvas.width * scale) / 2;
@@ -714,6 +727,16 @@ export function runDungeonView(
   }
 
   function onKeydown(e: KeyboardEvent): void {
+    // game/realgame.c: scancode 0x17 ('I') opens the inventory; exit_inv()
+    // (Escape here — the real screen's own catch-all click rect isn't wired
+    // yet) returns to the dungeon view untouched.
+    if (inventoryOpen) {
+      if (e.code === 'Escape') {
+        inventoryOpen = false;
+        draw();
+      }
+      return;
+    }
     switch (e.code) {
       case 'ArrowUp':
         attemptStep(state.direction, stepForward);
@@ -727,6 +750,10 @@ export function runDungeonView(
       case 'ArrowRight':
         state = { ...state, direction: turnRight(state.direction) };
         break;
+      case 'KeyI':
+        inventoryOpen = true;
+        draw();
+        return;
       default:
         return;
     }

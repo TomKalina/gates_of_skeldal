@@ -3,8 +3,11 @@ import {
   createCharacter,
   createEmptyRoster,
   firstEmptySlot,
+  HUMAN_PLACES,
+  HUMAN_RINGS,
   isPartyReady,
   isPortraitFemale,
+  MAX_INV,
   MAX_PARTY_SIZE,
   partySize,
   rollCharacterStats,
@@ -74,6 +77,17 @@ describe('spendBonusPoint', () => {
 
     const unchanged = spendBonusPoint(character, 'strength');
     expect(unchanged).toBe(character);
+  });
+});
+
+describe('createCharacter — inventory fields', () => {
+  it('matches generuj_postavu: empty backpack/equipment, inv_size=6', () => {
+    const character = createCharacter('Hero', 0, RANGES, () => 0);
+    expect(character.wearing).toEqual(new Array(HUMAN_PLACES).fill(0));
+    expect(character.rings).toEqual(new Array(HUMAN_RINGS).fill(0));
+    expect(character.arrows).toBe(0);
+    expect(character.invSize).toBe(6);
+    expect(character.inv).toEqual(new Array(MAX_INV).fill(0));
   });
 });
 

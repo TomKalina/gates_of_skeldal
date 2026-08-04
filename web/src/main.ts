@@ -3,6 +3,7 @@ import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
 import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
 import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
+import type { InventoryAssets } from './game/inventory-view';
 import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
 import { MENU_ITEMS } from './gui/menu-nav';
@@ -361,6 +362,31 @@ function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | und
   return assets;
 }
 
+// game/inv.c's inventory screen (Phase D2a: chrome + open/close only, see
+// inventory-view.ts). Loads its own body sprites (same CHARxx.PCX/index-0
+// colorkey convention as chargen's roster) rather than threading them
+// through from character-creation.ts — each screen loads its own assets,
+// same convention loadDungeonChromeAssets/loadDungeonTextures already use.
+function loadInventoryAssets(archive: DDLArchive): InventoryAssets {
+  const assets: InventoryAssets = {};
+  const arch = decodeIfPresent(archive, 'IOBLOUK.PCX');
+  if (arch) assets.arch = arch;
+  const deskPanel = decodeIfPresent(archive, 'IDESKA.PCX');
+  if (deskPanel) assets.deskPanel = deskPanel;
+  const bagGrid = decodeIfPresent(archive, 'IMRIZ1.PCX');
+  if (bagGrid) assets.bagGrid = bagGrid;
+
+  const bodySprites = new Map<number, ImageData>();
+  for (let i = 0; i < 8; i++) {
+    const name = `CHAR${i.toString(16).padStart(2, '0').toUpperCase()}.PCX`;
+    const raw = archive.extract(name);
+    if (raw) bodySprites.set(i, pcxToImageData(decodePcx(raw, { transparentIndex: 0 })));
+  }
+  if (bodySprites.size > 0) assets.bodySprites = bodySprites;
+
+  return assets;
+}
+
 function showPlaceholder(ctx: CanvasRenderingContext2D, message: string): void {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -413,6 +439,7 @@ async function enterDungeon(
   const map = parseMapFile(mapBuffer);
   const textures = loadDungeonTextures(archive, map, itemAppearance);
   const levelTexts = await loadLevelTexts(START_MAP);
+  const inventoryAssets = loadInventoryAssets(archive);
   const { result } = runDungeonView(
     ctx,
     { map, sector: start?.sector ?? map.startSector, direction: start?.direction ?? (map.startDirection as Direction) },
@@ -421,6 +448,7 @@ async function enterDungeon(
     chrome,
     loadMap,
     levelTexts,
+    inventoryAssets,
   );
   await result; // resolves when KONEC is clicked
   return true;

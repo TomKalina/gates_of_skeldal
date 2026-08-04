@@ -1117,6 +1117,67 @@ parity vs C build where applicable). Updated as issues close.
       to show the correct, correctly-accented text on click (not just on
       walk-through). Both re-verified again after the click-region
       tightening fix, confirming no regression from that change either.
+  - **Phase D2a — inventory screen chrome** (2026-08-04). First slice of
+    `game/inv.c` (3279 lines). Investigated via a dispatched research
+    agent first (the original assumption — reuse the C-phase GUI toolkit —
+    was already known dead code for menu/chargen; needed to check inv.c
+    specifically before assuming otherwise).
+    - **Real click mechanism, confirmed distinct from menu/chargen's own**:
+      `inv.c` uses the *same* `T_CLK_MAP`/`find_in_click_map` rect dispatcher
+      as the main dungeon view (`clk_inv_view[13]`, `game/inv.c:811-826`) —
+      plain axis-aligned rects, not a per-pixel `MENUVOL5.PCX`/`CHARGENM.PCX`-
+      style mask. One exception: the paper-doll region is a single big rect
+      whose handler (`item_pointed`, `inv.c:1975-1999`) does its own
+      per-pixel hit test against the *rendered* item-sprite silhouette
+      (reads the composited paper-doll bitmap's alpha byte at the cursor
+      offset) — pixel-perfect against real art, not a dedicated mask file.
+      Not wired in this slice (no interactions yet).
+    - **Real layout, verified against actual decoded PCX dimensions**:
+      `IOBLOUK.PCX` (262×360, the *same* asset/position `character-
+      creation.ts` already uses for its own arch — `(4,TOP_OFS=17)` in both
+      real screens), `IDESKA.PCX` (366×360, info-panel bg, at `(266,17)`),
+      `IMRIZ1.PCX` (326×305, backpack-grid bg) whose *decoded PCX header's
+      own height word gets patched in memory* before blitting to match the
+      real row count — `p[1]=INV_YS*((h->inv_size-1)/6)+58` — replicated as
+      a source-rect crop in Canvas2D rather than mutating decoded pixel
+      data. None of the three need a colorkey (verified: no single palette
+      index exceeds ~18% share in any of them, unlike the wall-texture
+      convention's reserved-background pattern).
+    - **Data model**: `THUMAN`'s real inventory fields (`game/globals.h`)
+      — `wearing[HUMAN_PLACES=9]`, `prsteny[HUMAN_RINGS=4]`, `sipy`
+      (arrows), `inv_size` (backpack size, starts at 6 per both real
+      `generuj_postavu` call sites — `chargen.c:620`/`chargen2.c:231` —
+      grows via a worn `PL_BATOH` item's `nosnost`), `inv[MAX_INV=30]` —
+      added to `party.ts`'s `Character`, all zero-initialized in
+      `createCharacter` (a fresh character's real state, not a stub).
+    - **Body-sprite compositing simplified correctly, not approximated**:
+      the real `build_items_wearing` composites the body sprite plus any
+      worn items into a `PO_XS×PO_YS` offscreen buffer, then `enemy_draw`
+      draws that buffer at *native scale* (`320`/320 = 1.0, no zoom) anchored
+      bottom-left at `(HUMAN_X,HUMAN_Y)`. Since no item is ever worn yet
+      (`wearing[]` is always all-zero), the offscreen-buffer step is
+      mathematically a no-op for this slice — algebraically combined the
+      two position offsets into one direct screen-space draw instead of
+      building an intermediate canvas with nothing to composite onto it.
+      The general (multi-layer) compositing path is real follow-up work
+      once equip exists, not implemented speculatively now.
+    - **Known, deliberate scope cut**: equip/unequip, drag-and-drop
+      (`picked_item`, a malloc'd null-terminated `short[]` — can hold a
+      whole scooped-up stack, not just one item), rings (`ring_place`),
+      arrows (`uloz_sip`), item combinations (`MakeItemCombinations`
+      against `COMBITEM.DAT`), and the backpack-swap path (`vymen_batohy`)
+      are all real, described in the research findings, and deliberately
+      not built yet — there is no way to get an item into an inventory at
+      all currently (no floor-item pickup, no chest triggers, no shop), so
+      building the interaction layer now would be untestable against real
+      data. `'I'` opens the screen (real scancode 0x17 in `realgame.c`);
+      `Escape` closes it (approximates `exit_inv`'s real full-screen
+      catch-all click rect, not wired as a click yet).
+    - Verified live: pressing `I` shows the real arch/doll/backpack-grid/
+      info-panel chrome with the current character's name and portrait,
+      arrow keys are correctly ignored while open (no dungeon movement
+      leaks through), `Escape` returns to the exact same dungeon view
+      state with no regression.
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -1127,7 +1188,7 @@ parity vs C build where applicable). Updated as issues close.
 | `souboje.c` | turn-based combat | `src/game/combat.ts` | pending |
 | `enemy.c` | mob AI, pathing, sprite rendering | `src/game/mobs.ts` | pending |
 | `kouzla.c` | spell system | `src/game/spells.ts` | pending |
-| `inv.c` | items, inventory, stats, shops | `src/game/items.ts` | pending (floor-item rendering split out already — see `draw_placed_items_normal`/Phase D1 note below; inventory UI/equip/shops still pending) |
+| `inv.c` | items, inventory, stats, shops | `src/game/inventory-view.ts` (screen), `src/game/party.ts` (`Character`'s inventory fields) | in-progress (floor-item rendering split out earlier — see `draw_placed_items_normal`/Phase D1; screen chrome + open/close done — Phase D2a; equip/drag/rings/arrows/combinations/shops still pending) |
 | `dialogy.c` | dialog bytecode interpreter + UI | `src/game/dialogs.ts` | pending |
 | `gamesave.c` | save/load archive | `src/game/savegame.ts` | pending |
 | `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending (two opcodes split out early — `MA_LOADL`/map transitions, `MA_TEXTL`/`MC_PASSSUC` level text — see `formats/map-file.ts`'s `parseMapMacros`/Phase D3-D4 notes; the general ~40-opcode VM is still unported) |
