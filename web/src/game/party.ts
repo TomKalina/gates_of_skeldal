@@ -111,6 +111,31 @@ export function createCharacter(
   };
 }
 
+// game/inv.c's put_item_to_inv(): flattens a floor-pickup group (container
+// contents included — abs() strips the "inside a container" negative tag,
+// see map-file.ts's popFloorItemGroup) into separate backpack slots, one
+// per item, filling the first empty inv[] slot for each. Processes the
+// group in reverse, matching the source's own `while(i) { i--; ... }`
+// countdown, and stops entirely (not skip-and-continue) the moment
+// inv_size is exhausted — the source's real early exit. Returns whichever
+// leading items didn't fit, unchanged, for the caller to keep "on the
+// cursor". The real PL_SIP arrow-merge shortcut (arrows go into `arrows`
+// instead of a slot) isn't ported yet — ITEMS.DAT's `umisteni`/`druh`
+// fields aren't parsed by this port's items-file.ts, so every item here
+// always takes a normal slot.
+export function depositItems(character: Character, items: readonly number[]): { character: Character; leftover: readonly number[] } {
+  const inv = character.inv.slice();
+  let pos = 0;
+  let i = items.length;
+  while (i > 0) {
+    while (pos < character.invSize && inv[pos]) pos++;
+    if (pos >= character.invSize) break;
+    i--;
+    inv[pos] = Math.abs(items[i]!);
+  }
+  return { character: { ...character, inv }, leftover: items.slice(0, i) };
+}
+
 export function validateCharacterName(name: string): boolean {
   return name.trim().length > 0;
 }

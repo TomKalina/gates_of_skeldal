@@ -356,6 +356,15 @@ produces (`codecs/pcx.ts`'s `decodePcx` now also exposes `.indices`).
     item is reachable yet (no pickup/chest/shop), so equip/unequip,
     drag-and-drop, rings, arrows, and item combinations (`COMBITEM.DAT`)
     are all real, deliberately deferred follow-up work.
+  - **D2b — near-sector floor-item pickup — done** (2026-08-04): the real
+    `pick_item_`/`pop_item`/`push_item`/`put_item_to_inv` chain (see
+    port-graph.md's Phase D2b entry), wired to the dungeon view's actual
+    click regions. Far-sector pickup (one step ahead, a separate
+    `SD_THING_IMPS`/`SD_ITPUSH`-gated case), `check_pick`'s sprite-bbox
+    refinement, and the `PL_SIP` arrow-merge shortcut are real, deliberately
+    deferred gaps — see the port-graph.md entry for why. Equip/unequip,
+    drag-and-drop, rings, arrows, and item combinations are still D2a's
+    original deferred scope, unaffected by this slice.
 - **D3. Map switching** — **done for the in-world MA_LOADL/MC_PASSFAIL
   wall-transition case** (2026-07-19; see port-graph.md's Phase D3 entry).
   There's no separate `A_CHANGE_MAP` action family — map switches turn out

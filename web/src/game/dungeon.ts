@@ -1,4 +1,4 @@
-import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, SD_AUTOANIM, SD_LEFT_ARC, SD_PASS_ACTION, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, type DungeonMap, type MapTransition } from '../formats/map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, popFloorItemGroup, pushFloorItemGroup, SD_AUTOANIM, SD_LEFT_ARC, SD_PASS_ACTION, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, type DungeonMap, type MapTransition } from '../formats/map-file';
 import { applyAction } from './actions';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
@@ -118,6 +118,33 @@ export function touchFrontWall(map: DungeonMap, sector: number, dir: Direction):
   if (runConfiguredAction(map, side.sectorTag, side.sideTag, side.action)) changed = true;
 
   return { changed, textIndex: touchTextTriggerAt(map, sector, dir) };
+}
+
+// game/clk_map.c's near-sector pick_item_ click regions: id0 (left half of
+// the viewport) and id1 (right half) target the CURRENT sector's front
+// (id0) and right (id1) floor piles — `idd=(id+viewdir)&3`, the same
+// rotation floorItemsForSector already applies for rendering (i=0/1 there).
+// The far-sector regions (id2/id3, one step ahead via step_next) are a real,
+// separate case gated by a flags/oblouk check this port doesn't model yet
+// (SD_THING_IMPS/SD_ITPUSH) — deliberately out of scope here; only the
+// current sector's own two piles are reachable through this function.
+export type FloorItemCorner = 0 | 1;
+
+// game/inv.c's pop_item(), scoped to the near-sector click regions above.
+// Pops the topmost real item plus its container-content run (see
+// map-file.ts's popFloorItemGroup) from the pile at (sector, (corner+facing)
+// &3). Returns undefined if that pile is empty or holds only inert
+// (contained-only, no leading positive) entries.
+export function pickUpFloorItem(map: DungeonMap, sector: number, facing: Direction, corner: FloorItemCorner): number[] | undefined {
+  const side = ((corner + facing) & 3) as Direction;
+  return popFloorItemGroup(map, sector, side);
+}
+
+// game/inv.c's push_item(), the inverse of pickUpFloorItem — puts a
+// previously-popped (or player-dropped) group back onto the same pile.
+export function putBackFloorItem(map: DungeonMap, sector: number, facing: Direction, corner: FloorItemCorner, items: readonly number[]): void {
+  const side = ((corner + facing) & 3) as Direction;
+  pushFloorItemGroup(map, sector, side, items);
 }
 
 function stepThrough(state: DungeonState, dir: Direction): DungeonState {

@@ -255,8 +255,11 @@ export interface DungeonMap {
   archRightTextures: readonly string[];
   // A_MAPITEM: floor item piles, keyed by sector*4+direction (same indexing
   // as `sides`) — see placedItemsAt(), dungeon.ts's ViewCell.floorItems, and
-  // game/builder.c's draw_placed_items_normal.
-  placedItems: ReadonlyMap<number, readonly number[]>;
+  // game/builder.c's draw_placed_items_normal. Mutable (not Readonly) like
+  // `sides`/`sectors` — this port treats a parsed DungeonMap as live session
+  // state; game/inv.c's pop_item/push_item (floor pickup, see
+  // popFloorItemGroup/pushFloorItemGroup) really do rewrite this at runtime.
+  placedItems: Map<number, number[]>;
   // A_MAPMACR's MA_LOADL/MC_PASSFAIL instructions only (this port doesn't
   // interpret the general ~40-opcode macro VM — see mapTransitionAt() and
   // dungeon.ts's pendingTransition()), keyed by sector*4+direction.
@@ -581,6 +584,46 @@ export function sideAt(map: DungeonMap, sector: number, direction: number): MapS
 
 export function placedItemsAt(map: DungeonMap, sector: number, direction: number): readonly number[] {
   return map.placedItems.get(sector * 4 + direction) ?? [];
+}
+
+// game/inv.c's pop_item(): finds the LAST (topmost) real item in the pile
+// — find_item scans the whole array keeping the last match, matching
+// real per-pile authoring where later entries render on top — then pops
+// it plus every following negative "contained" entry (count_items_inside:
+// a floor-authoring convention for a container's contents, not a rendering
+// flag — see draw_placed_items_normal's own note on why negatives never
+// draw). Splices the rest of the pile back together exactly like the
+// source's own memcpy-before + memcpy-after reconstruction, so remaining
+// items' jitter offsets (their slot index) shift the same way the real
+// engine's do. Returns the popped group (signed, contained items still
+// negative — only put_item_to_inv's abs() flattens them, not pop itself),
+// or undefined if the pile has no real (positive) item to pick up.
+export function popFloorItemGroup(map: DungeonMap, sector: number, direction: number): number[] | undefined {
+  const key = sector * 4 + direction;
+  const pile = map.placedItems.get(key);
+  if (!pile) return undefined;
+  let lastPositive = -1;
+  for (let i = 0; i < pile.length; i++) if (pile[i]! > 0) lastPositive = i;
+  if (lastPositive === -1) return undefined;
+  let end = lastPositive + 1;
+  while (end < pile.length && pile[end]! < 0) end++;
+
+  const popped = pile.slice(lastPositive, end);
+  const remainder = [...pile.slice(0, lastPositive), ...pile.slice(end)];
+  if (remainder.length > 0) map.placedItems.set(key, remainder);
+  else map.placedItems.delete(key);
+  return popped;
+}
+
+// game/inv.c's push_item(): appends onto the end of whatever's already on
+// that side's pile (or creates one). Used both for "put the held item(s)
+// back" and, in the real source, a couple of special-sector redirects
+// (S_DIRA pits, teleport sectors) this port doesn't model yet.
+export function pushFloorItemGroup(map: DungeonMap, sector: number, direction: number, items: readonly number[]): void {
+  if (items.length === 0) return;
+  const key = sector * 4 + direction;
+  const existing = map.placedItems.get(key) ?? [];
+  map.placedItems.set(key, [...existing, ...items]);
 }
 
 export function textTriggerAt(map: DungeonMap, sector: number, direction: number): number | undefined {
