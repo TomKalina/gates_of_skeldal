@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { A_OPEN_CLOSE, SD_AUTOANIM, SD_LEFT_ARC, SD_PASS_ACTION, SD_PLAY_IMPS, SD_PRIM_FORV, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_FORV, SD_SEC_VIS, SD_TRANSPARENT, type DungeonMap, type MapSide } from '../formats/map-file';
-import { behind, canStep, computeVisibleGrid, computeViewCells, passageTextTrigger, pendingTransition, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight } from './dungeon';
+import { behind, canStep, computeVisibleGrid, computeViewCells, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight } from './dungeon';
 
 function wall(prim: number): MapSide {
   return { prim, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 };
@@ -215,6 +215,40 @@ describe('movement', () => {
     };
     expect(passageTextTrigger(map, 0, 1)).toBe(4);
     expect(passageTextTrigger(map, 1, 1)).toBeUndefined();
+  });
+});
+
+describe('pickUpFloorItem / putBackFloorItem', () => {
+  // game/clk_map.c's near-sector click regions: id0 (corner 0) targets the
+  // front pile (side = (0+facing)&3), id1 (corner 1) the right pile
+  // (side = (1+facing)&3) — see dungeon.ts's own header comment.
+  it('pops the front pile (corner 0) at the current sector, rotated by facing', () => {
+    const map = buildTestMap();
+    map.placedItems.set(0 * 4 + 1, [52, -40, -22]); // sector 0, side 1 = (0+facing)&3 for facing=1
+
+    const popped = pickUpFloorItem(map, 0, 1, 0);
+    expect(popped).toEqual([52, -40, -22]);
+    expect(map.placedItems.has(0 * 4 + 1)).toBe(false);
+  });
+
+  it('pops the right pile (corner 1) at the current sector, rotated by facing', () => {
+    const map = buildTestMap();
+    map.placedItems.set(0 * 4 + 2, [7]); // sector 0, side 2 = (1+facing)&3 for facing=1
+
+    const popped = pickUpFloorItem(map, 0, 1, 1);
+    expect(popped).toEqual([7]);
+  });
+
+  it('returns undefined when the targeted pile is empty', () => {
+    const map = buildTestMap();
+    expect(pickUpFloorItem(map, 0, 1, 0)).toBeUndefined();
+  });
+
+  it('putBackFloorItem pushes onto the same rotated pile pickUpFloorItem reads from', () => {
+    const map = buildTestMap();
+    putBackFloorItem(map, 0, 1, 0, [52, -40]);
+    expect(map.placedItems.get(0 * 4 + 1)).toEqual([52, -40]);
+    expect(pickUpFloorItem(map, 0, 1, 0)).toEqual([52, -40]);
   });
 });
 

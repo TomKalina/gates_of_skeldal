@@ -1,7 +1,8 @@
-import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
+import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
 import { readSave, writeSave } from './save';
-import type { Character } from './party';
+import { depositItems, type Character } from './party';
 import { faceThumbnail } from './portraits';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
@@ -143,6 +144,15 @@ const DPAD_QUADRANTS = {
 } as const;
 type DpadDirection = keyof typeof DPAD_QUADRANTS;
 
+// game/clk_map.c's pick_item_ click regions — id0 (left) and id1 (right)
+// halves of this rect, together spanning the near-sector floor. Absolute
+// screen coordinates, taken directly from the real rect list; this canvas
+// is the same 640x480 frame the original rects were authored against. The
+// far-sector regions (id2/id3, one step ahead) need a gate (SD_THING_IMPS/
+// SD_ITPUSH) this port doesn't model yet — see dungeon.ts's pickUpFloorItem
+// header comment — so only this near-sector rect is wired.
+const PICK_ITEM_REGION = { x: 0, y: 303, width: 639, height: 73 } as const;
+
 const PARTY_BOX_GAP = 4;
 const PARTY_BOX_HEIGHT = BOTTOM_BAR_HEIGHT;
 const PARTY_PORTRAIT_HEIGHT = 86;
@@ -180,17 +190,33 @@ export function runDungeonView(
   ctx: CanvasRenderingContext2D,
   initial: DungeonState,
   initialTextures: DungeonTextureSet,
-  party: readonly Character[],
+  initialParty: readonly Character[],
   chrome: DungeonChromeAssets = {},
   loadMap: MapLoader = () => Promise.resolve(null),
   initialLevelTexts: ReadonlyMap<number, string> = new Map(),
+  inventoryAssets: InventoryAssets = {},
 ): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
   let textures = initialTextures;
   let levelTexts = initialLevelTexts;
+  let party = initialParty;
   let hoverDpad: DpadDirection | null = null;
   let statusText = '';
+  // game/inv.c's inventory/equipment screen (Phase D2a: chrome + open/close
+  // only, see inventory-view.ts's own header comment for what's deferred).
+  // Always shows the first party member — real inv.c switches via clicking
+  // the party portrait strip (`start_invetory`), not built yet.
+  let inventoryOpen = false;
+  // game/inv.c's picked_item — the group currently "on the cursor" after a
+  // pick_item_ click, waiting to be dropped back on the floor (clicking the
+  // same pile again) or deposited into a party member's backpack (clicking
+  // their portrait, see put_item_to_inv/depositItems). Signed values
+  // (container contents still negative), same as the floor pile itself —
+  // only depositItems' abs() flattens them.
+  let heldItem: number[] | null = null;
+  let cursorX = -1000;
+  let cursorY = -1000;
 
   let resolveResult!: () => void;
   const result = new Promise<void>((resolve) => {
@@ -507,10 +533,9 @@ export function runDungeonView(
     return { x: BOTTOM_BAR.x + BOTTOM_BAR.width - DPAD_SIZE.width - 12, y: BOTTOM_BAR.y };
   }
 
-  function drawBottomBar(): void {
-    ctx.fillStyle = '#111';
-    ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
-
+  // Shared between drawBottomBar and onMouseDown's portrait-deposit hit-test
+  // so the clickable rects always match what's actually drawn.
+  function partyBoxPositions(): number[] {
     const dpadOrig = dpadOrigin();
     // Party boxes shrink to fit if they'd otherwise run into the D-pad —
     // no evidence for how the real game lays out a full 6-member party here,
@@ -518,12 +543,23 @@ export function runDungeonView(
     const availableWidth = dpadOrig.x - PARTY_ROW_X - 12;
     const naturalWidth = party.length * PARTY_BOX_WIDTH + Math.max(0, party.length - 1) * PARTY_BOX_GAP;
     const shrink = naturalWidth > availableWidth && party.length > 0 ? availableWidth / naturalWidth : 1;
+    const positions: number[] = [];
     let x = PARTY_ROW_X;
-    for (const member of party) {
-      drawPartyBox(member, x);
+    for (let i = 0; i < party.length; i++) {
+      positions.push(x);
       x += (PARTY_BOX_WIDTH + PARTY_BOX_GAP) * shrink;
     }
+    return positions;
+  }
 
+  function drawBottomBar(): void {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
+
+    const positions = partyBoxPositions();
+    party.forEach((member, i) => drawPartyBox(member, positions[i]!));
+
+    const dpadOrig = dpadOrigin();
     const image = dpadImage();
     if (image) ctx.drawImage(toDrawable(image), dpadOrig.x, dpadOrig.y);
     else {
@@ -540,6 +576,11 @@ export function runDungeonView(
   }
 
   function draw(): void {
+    if (inventoryOpen) {
+      const character = party[0];
+      if (character) drawInventoryScreen(ctx, character, inventoryAssets);
+      return;
+    }
     // Sky-colored, not black: drawFloorCeilBase's single fallback split (see
     // its own comment) is derived from the *nearest* center-column cell, so
     // a farther no-ceiling cell newly exposed through an opened passage
@@ -573,6 +614,18 @@ export function runDungeonView(
 
     drawTopBar();
     drawBottomBar();
+    drawHeldItemCursor();
+  }
+
+  // engine1.c's own picked_item cursor draw: the held group's real (first,
+  // always-positive) item follows the mouse until it's dropped back on the
+  // floor or deposited into a party member.
+  function drawHeldItemCursor(): void {
+    const itemNumber = heldItem?.[0];
+    if (itemNumber === undefined) return;
+    const image = textures.item.get(itemNumber);
+    if (!image) return;
+    ctx.drawImage(toDrawable(image), cursorX - image.width / 2, cursorY - image.height / 2);
   }
 
   function saveGame(): void {
@@ -594,6 +647,7 @@ export function runDungeonView(
   }
 
   function onMouseDown(e: MouseEvent): void {
+    if (inventoryOpen) return; // clicking a slot/ring/doll isn't wired yet — see inventory-view.ts
     const rect = canvas.getBoundingClientRect();
     const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
     const offX = rect.left + (rect.width - canvas.width * scale) / 2;
@@ -615,6 +669,50 @@ export function runDungeonView(
       return;
     }
     // Nastavení and the icon cells have no system to open yet.
+
+    // game/clk_map.c: pick_item_'s rects are registered BEFORE the catch-all
+    // clk_touch rect, so they get dispatch priority — checked here ahead of
+    // the front-wall touch handling below. A first click with an empty
+    // cursor pops the pile (see dungeon.ts's pickUpFloorItem); a second
+    // click with something already held puts it back on the same pile,
+    // matching pick_item_'s own branching.
+    if (rectContains(PICK_ITEM_REGION, x, y)) {
+      const corner: 0 | 1 = x < PICK_ITEM_REGION.x + PICK_ITEM_REGION.width / 2 ? 0 : 1;
+      if (heldItem) {
+        putBackFloorItem(state.map, state.sector, state.direction, corner, heldItem);
+        heldItem = null;
+        statusText = 'Odloženo.';
+        draw();
+      } else {
+        const popped = pickUpFloorItem(state.map, state.sector, state.direction, corner);
+        if (popped) {
+          heldItem = popped;
+          statusText = 'Zvednuto.';
+          draw();
+        }
+      }
+      return;
+    }
+
+    // Depositing a held item into a party member's backpack by clicking
+    // their portrait box — real inv.c's start_invetory else-branch (the
+    // if-branch, switching the open inventory screen to the clicked member,
+    // isn't wired: inventoryOpen always shows party[0], see its own comment).
+    if (heldItem) {
+      const positions = partyBoxPositions();
+      for (let i = 0; i < party.length; i++) {
+        const boxRect = { x: positions[i]!, y: BOTTOM_BAR.y, width: PARTY_BOX_WIDTH, height: PARTY_BOX_HEIGHT };
+        if (rectContains(boxRect, x, y)) {
+          const member = party[i]!;
+          const { character, leftover } = depositItems(member, heldItem);
+          party = party.map((m, idx) => (idx === i ? character : m));
+          heldItem = leftover.length > 0 ? [...leftover] : null;
+          statusText = leftover.length > 0 ? 'Batoh je plný.' : 'Vloženo do batohu.';
+          draw();
+          return;
+        }
+      }
+    }
 
     // realgame.c's clk_touch: no matter *where* within its resolved rect
     // you click, it always resolves to the current front wall
@@ -666,6 +764,12 @@ export function runDungeonView(
     const x = (e.clientX - offX) / scale;
     const y = (e.clientY - offY) / scale;
 
+    if (heldItem) {
+      cursorX = x;
+      cursorY = y;
+      draw();
+    }
+
     const dpadOrig = dpadOrigin();
     const localX = x - dpadOrig.x;
     const localY = y - dpadOrig.y;
@@ -714,6 +818,16 @@ export function runDungeonView(
   }
 
   function onKeydown(e: KeyboardEvent): void {
+    // game/realgame.c: scancode 0x17 ('I') opens the inventory; exit_inv()
+    // (Escape here — the real screen's own catch-all click rect isn't wired
+    // yet) returns to the dungeon view untouched.
+    if (inventoryOpen) {
+      if (e.code === 'Escape') {
+        inventoryOpen = false;
+        draw();
+      }
+      return;
+    }
     switch (e.code) {
       case 'ArrowUp':
         attemptStep(state.direction, stepForward);
@@ -727,6 +841,10 @@ export function runDungeonView(
       case 'ArrowRight':
         state = { ...state, direction: turnRight(state.direction) };
         break;
+      case 'KeyI':
+        inventoryOpen = true;
+        draw();
+        return;
       default:
         return;
     }

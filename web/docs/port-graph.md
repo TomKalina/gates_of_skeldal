@@ -1117,6 +1117,142 @@ parity vs C build where applicable). Updated as issues close.
       to show the correct, correctly-accented text on click (not just on
       walk-through). Both re-verified again after the click-region
       tightening fix, confirming no regression from that change either.
+  - **Phase D2a — inventory screen chrome** (2026-08-04). First slice of
+    `game/inv.c` (3279 lines). Investigated via a dispatched research
+    agent first (the original assumption — reuse the C-phase GUI toolkit —
+    was already known dead code for menu/chargen; needed to check inv.c
+    specifically before assuming otherwise).
+    - **Real click mechanism, confirmed distinct from menu/chargen's own**:
+      `inv.c` uses the *same* `T_CLK_MAP`/`find_in_click_map` rect dispatcher
+      as the main dungeon view (`clk_inv_view[13]`, `game/inv.c:811-826`) —
+      plain axis-aligned rects, not a per-pixel `MENUVOL5.PCX`/`CHARGENM.PCX`-
+      style mask. One exception: the paper-doll region is a single big rect
+      whose handler (`item_pointed`, `inv.c:1975-1999`) does its own
+      per-pixel hit test against the *rendered* item-sprite silhouette
+      (reads the composited paper-doll bitmap's alpha byte at the cursor
+      offset) — pixel-perfect against real art, not a dedicated mask file.
+      Not wired in this slice (no interactions yet).
+    - **Real layout, verified against actual decoded PCX dimensions**:
+      `IOBLOUK.PCX` (262×360, the *same* asset/position `character-
+      creation.ts` already uses for its own arch — `(4,TOP_OFS=17)` in both
+      real screens), `IDESKA.PCX` (366×360, info-panel bg, at `(266,17)`),
+      `IMRIZ1.PCX` (326×305, backpack-grid bg) whose *decoded PCX header's
+      own height word gets patched in memory* before blitting to match the
+      real row count — `p[1]=INV_YS*((h->inv_size-1)/6)+58` — replicated as
+      a source-rect crop in Canvas2D rather than mutating decoded pixel
+      data. None of the three need a colorkey (verified: no single palette
+      index exceeds ~18% share in any of them, unlike the wall-texture
+      convention's reserved-background pattern).
+    - **Data model**: `THUMAN`'s real inventory fields (`game/globals.h`)
+      — `wearing[HUMAN_PLACES=9]`, `prsteny[HUMAN_RINGS=4]`, `sipy`
+      (arrows), `inv_size` (backpack size, starts at 6 per both real
+      `generuj_postavu` call sites — `chargen.c:620`/`chargen2.c:231` —
+      grows via a worn `PL_BATOH` item's `nosnost`), `inv[MAX_INV=30]` —
+      added to `party.ts`'s `Character`, all zero-initialized in
+      `createCharacter` (a fresh character's real state, not a stub).
+    - **Body-sprite compositing simplified correctly, not approximated**:
+      the real `build_items_wearing` composites the body sprite plus any
+      worn items into a `PO_XS×PO_YS` offscreen buffer, then `enemy_draw`
+      draws that buffer at *native scale* (`320`/320 = 1.0, no zoom) anchored
+      bottom-left at `(HUMAN_X,HUMAN_Y)`. Since no item is ever worn yet
+      (`wearing[]` is always all-zero), the offscreen-buffer step is
+      mathematically a no-op for this slice — algebraically combined the
+      two position offsets into one direct screen-space draw instead of
+      building an intermediate canvas with nothing to composite onto it.
+      The general (multi-layer) compositing path is real follow-up work
+      once equip exists, not implemented speculatively now.
+    - **Known, deliberate scope cut**: equip/unequip, drag-and-drop
+      (`picked_item`, a malloc'd null-terminated `short[]` — can hold a
+      whole scooped-up stack, not just one item), rings (`ring_place`),
+      arrows (`uloz_sip`), item combinations (`MakeItemCombinations`
+      against `COMBITEM.DAT`), and the backpack-swap path (`vymen_batohy`)
+      are all real, described in the research findings, and deliberately
+      not built yet — there is no way to get an item into an inventory at
+      all currently (no floor-item pickup, no chest triggers, no shop), so
+      building the interaction layer now would be untestable against real
+      data. `'I'` opens the screen (real scancode 0x17 in `realgame.c`);
+      `Escape` closes it (approximates `exit_inv`'s real full-screen
+      catch-all click rect, not wired as a click yet).
+    - Verified live: pressing `I` shows the real arch/doll/backpack-grid/
+      info-panel chrome with the current character's name and portrait,
+      arrow keys are correctly ignored while open (no dungeon movement
+      leaks through), `Escape` returns to the exact same dungeon view
+      state with no regression.
+  - **Phase D2b — near-sector floor-item pickup** (2026-08-04). The natural
+    follow-up to D2a — equip/drag/shop were explicitly deferred there
+    pending "a way to get an item into an inventory"; this is that way.
+    - **Negative `A_MAPITEM` entries revisited**: Phase D1 documented
+      negative pile entries as inert, never-drawn placeholders — still
+      correct for *rendering* (`draw_placed_items_normal`'s `if (*c>0)`
+      really does skip them). But `inv.c`'s `count_items_inside`
+      (`inv.c:457-465`: `int c=1; place++; while(*place++<0) c++; return
+      c;`) reveals they're real *container contents* — a positive item plus
+      every immediately-following negative entry is scooped together on
+      pickup (e.g. `LESPRED.MAP`'s one real pile, `[52,-40,-22,-37,-45,-7,
+      -7]`, is item 52 "Bandalír" containing 6 items). `formats/map-file.ts`'s
+      `popFloorItemGroup`/`pushFloorItemGroup` port `pop_item`/`push_item`
+      exactly: `pop_item` finds the *last* positive entry via `find_item`
+      (later entries render on top) and pops it plus its trailing negative
+      run, splicing the pile back together the same way the source's
+      memcpy-before/after reconstruction does (so remaining items' jitter
+      offsets shift identically). `DungeonMap.placedItems` changed from a
+      `ReadonlyMap` to a plain mutable `Map` for this — this port already
+      treats a parsed map as live session state (`sides`/`sectors` mutate
+      the same way for doors), so pickup rewriting the pile at runtime is
+      the same convention, not a new one.
+    - **`put_item_to_inv` (`inv.c:759-790`) flattens, doesn't preserve
+      nesting**: every entry (`abs()`-stripped) lands in its own `inv[]`
+      slot — a picked-up container's contents don't stay grouped. Ported as
+      `party.ts`'s `depositItems`. The real loop's exact backwards-iteration-
+      with-early-break shape matters and was initially mis-drafted (first
+      draft used `continue` on a full slot, incorrectly skipping ahead to
+      try the *next* item in a full backpack — re-reading `while(i) {
+      for(;pos<inv_size && inv[pos];pos++); if(pos>=inv_size) break; i--;
+      it=abs(picked_items[i]); inv[pos]=it; }` shows it `break`s the whole
+      loop instead, leaving every remaining (lower-indexed, not-yet-
+      processed) item "on the cursor"). Confirmed live against exactly this
+      edge: depositing `LESPRED.MAP`'s 7-entry pile into a fresh
+      `invSize=6` character fills 6 slots (backwards: the 6 contained items)
+      and leaves item 52 itself — the container — as leftover, still held.
+      The `PL_SIP` arrow-merge shortcut (arrows bypass `inv[]` into `sipy`)
+      is real but gated on fields (`umisteni`/`druh`) `items-file.ts`
+      doesn't parse yet — skipped, not relevant to any currently-loadable
+      item.
+    - **Click regions** (`game/clk_map.c:460-463`, registered *before* the
+      catch-all `clk_touch` rect, so real dispatch tries them first):
+      4 rects, `idd=(id+viewdir)&3` — the same rotation
+      `floorItemsForSector` (Phase D1) already applies for rendering. Only
+      the near-sector pair (id0/id1, the current `viewsector`) is wired —
+      `dungeon.ts`'s `pickUpFloorItem`/`putBackFloorItem` — since it's the
+      only case verifiable against real reachable data (`LESPRED.MAP`'s one
+      item, sector 8 side 0, sits in the *current* sector when standing in
+      sector 8; confirmed reachable in 2 steps from the real start via
+      18→13→8, no door-opening needed). The far-sector pair (id2/id3, one
+      step ahead via `step_next`) needs a real, separate gate (`if
+      ((flags & SD_THING_IMPS) && !(oblouk & SD_ITPUSH)) return 0;`) this
+      port doesn't model yet — left out rather than half-ported against a
+      gate nothing currently exercises. `check_pick`'s Y-coordinate
+      heuristic (a further "did you click the item's actual sprite, not
+      just nearby floor" refinement) is also skipped — any click in the
+      id0/id1 rect attempts pickup, a known, documented, more-permissive-
+      than-real simplification.
+    - **Cursor state**: `dungeon-view.ts`'s `heldItem` mirrors `inv.c`'s
+      `picked_item` (a signed array, container contents still negative —
+      only `depositItems`' `abs()` flattens them). A click on the pile with
+      an empty cursor pops it; a click with something held puts it back
+      (`pick_item_`'s own branching). The held item's sprite follows the
+      mouse (tracked via `onMouseMove`) until dropped back on the floor or
+      deposited into a party member's backpack via clicking their portrait
+      box in the bottom bar (`start_invetory`'s else-branch; the if-branch,
+      switching the *open inventory screen* to the clicked member, isn't
+      wired — D2a's `inventoryOpen` still only ever shows `party[0]`).
+    - Verified live end-to-end against `LESPRED.MAP`'s real sector-8 pile:
+      click pops the item (floor sprite disappears, "Zvednuto."), clicking
+      the party portrait deposits it (backpack fills to its real
+      `invSize=6` cap, the 7th entry — the container itself — correctly
+      left over on the cursor, exercising the break-not-continue edge case
+      live), clicking the same floor rect again puts the leftover back
+      (sprite reappears, "Odloženo.").
 
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
@@ -1127,7 +1263,7 @@ parity vs C build where applicable). Updated as issues close.
 | `souboje.c` | turn-based combat | `src/game/combat.ts` | pending |
 | `enemy.c` | mob AI, pathing, sprite rendering | `src/game/mobs.ts` | pending |
 | `kouzla.c` | spell system | `src/game/spells.ts` | pending |
-| `inv.c` | items, inventory, stats, shops | `src/game/items.ts` | pending (floor-item rendering split out already — see `draw_placed_items_normal`/Phase D1 note below; inventory UI/equip/shops still pending) |
+| `inv.c` | items, inventory, stats, shops | `src/game/inventory-view.ts` (screen), `src/game/party.ts` (`Character`'s inventory fields, `depositItems`), `src/formats/map-file.ts` (`popFloorItemGroup`/`pushFloorItemGroup`), `src/game/dungeon.ts` (`pickUpFloorItem`/`putBackFloorItem`) | in-progress (floor-item rendering split out earlier — see `draw_placed_items_normal`/Phase D1; screen chrome + open/close done — Phase D2a; near-sector floor pickup/deposit done — Phase D2b; far-sector pickup, equip/drag/rings/arrows/combinations/shops still pending) |
 | `dialogy.c` | dialog bytecode interpreter + UI | `src/game/dialogs.ts` | pending |
 | `gamesave.c` | save/load archive | `src/game/savegame.ts` | pending |
 | `macros.c` | map action-script engine (A_MAPMACR) | `src/game/macros.ts` | pending (two opcodes split out early — `MA_LOADL`/map transitions, `MA_TEXTL`/`MC_PASSSUC` level text — see `formats/map-file.ts`'s `parseMapMacros`/Phase D3-D4 notes; the general ~40-opcode VM is still unported) |

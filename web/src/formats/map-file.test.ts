@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, parseMapFile, placedItemsAt, popFloorItemGroup, pushFloorItemGroup, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, SD_APPLY_2ND, SD_HAS_NICHE, SD_PLAY_IMPS, SD_PRIM_ANIM, SD_PRIM_FORV, SD_PRIM_VIS, SD_SEC_FORV, type DungeonMap, type MapSide } from './map-file';
 
 // Builds a synthetic .MAP buffer following the real block layout (tag +
 // type + size + ignored int32 + payload) — no copyrighted map data involved.
@@ -307,6 +307,78 @@ describe('parseMapFile', () => {
     const buffer = buildMapBufferWithAction();
     const map = parseMapFile(buffer);
     expect(sideAt(map, 0, 3)?.action).toBe(A_OPEN_CLOSE);
+  });
+});
+
+// A minimal DungeonMap for popFloorItemGroup/pushFloorItemGroup tests —
+// only `placedItems` is exercised, everything else is blank filler.
+function blankMap(placedItems: Map<number, number[]>): DungeonMap {
+  return {
+    mapName: 'Test',
+    startSector: 0,
+    startDirection: 0,
+    sectors: [],
+    sides: [],
+    mainTextures: [],
+    leftTextures: [],
+    rightTextures: [],
+    ceilTextures: [],
+    floorTextures: [],
+    archLeftTextures: [],
+    archRightTextures: [],
+    fadeColor: { r: 0, g: 0, b: 0 },
+    placedItems,
+    mapTransitions: new Map(),
+    textTriggers: new Map(),
+    touchTextTriggers: new Map(),
+  };
+}
+
+describe('popFloorItemGroup', () => {
+  it('pops the last positive item plus its trailing negative "contained" run (game/inv.c: count_items_inside)', () => {
+    // Real LESPRED.MAP pile: item 52 ("Bandalír") containing 6 items.
+    const map = blankMap(new Map([[8 * 4 + 0, [52, -40, -22, -37, -45, -7, -7]]]));
+    const popped = popFloorItemGroup(map, 8, 0);
+    expect(popped).toEqual([52, -40, -22, -37, -45, -7, -7]);
+    expect(placedItemsAt(map, 8, 0)).toEqual([]);
+  });
+
+  it('only pops the LAST positive item and its own contained run, leaving earlier items in the pile', () => {
+    const map = blankMap(new Map([[0, [10, -5, 20, -3, -3]]]));
+    const popped = popFloorItemGroup(map, 0, 0);
+    expect(popped).toEqual([20, -3, -3]);
+    expect(placedItemsAt(map, 0, 0)).toEqual([10, -5]);
+  });
+
+  it('returns undefined when the pile has no positive item to pick up', () => {
+    const map = blankMap(new Map([[0, [-5, -3]]]));
+    expect(popFloorItemGroup(map, 0, 0)).toBeUndefined();
+    expect(placedItemsAt(map, 0, 0)).toEqual([-5, -3]);
+  });
+
+  it('returns undefined when there is no pile at all', () => {
+    const map = blankMap(new Map());
+    expect(popFloorItemGroup(map, 0, 0)).toBeUndefined();
+  });
+});
+
+describe('pushFloorItemGroup', () => {
+  it('appends onto the end of an existing pile', () => {
+    const map = blankMap(new Map([[0, [10, -5]]]));
+    pushFloorItemGroup(map, 0, 0, [20, -3]);
+    expect(placedItemsAt(map, 0, 0)).toEqual([10, -5, 20, -3]);
+  });
+
+  it('creates a new pile where none existed', () => {
+    const map = blankMap(new Map());
+    pushFloorItemGroup(map, 1, 2, [7]);
+    expect(placedItemsAt(map, 1, 2)).toEqual([7]);
+  });
+
+  it('does nothing when given an empty group', () => {
+    const map = blankMap(new Map());
+    pushFloorItemGroup(map, 0, 0, []);
+    expect(map.placedItems.has(0)).toBe(false);
   });
 });
 
