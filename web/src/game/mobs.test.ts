@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMob, parseMobTable, TMOB_SIZE } from './mobs';
+import { parseMob, parseMobPlacements, parseMobTable, TMOB_SIZE } from './mobs';
 
 function fixture(): Uint8Array {
   const buf = new Uint8Array(TMOB_SIZE);
@@ -49,5 +49,20 @@ describe('parseMob', () => {
     expect(mobs).toHaveLength(2);
     expect(mobs[0]?.name).toBe('');
     expect(mobs[1]?.name).toBe('Skeleton');
+  });
+});
+
+describe('parseMobPlacements', () => {
+  it('decodes sector, template number and dir like load_enemies', () => {
+    const buf = new Uint8Array(8);
+    const v = new DataView(buf.buffer);
+    v.setInt16(0, 42, true);
+    v.setUint16(2, (3 << 14) | 0x123, true);
+    v.setInt16(4, 7, true);
+    v.setUint16(6, 5, true);
+    expect(parseMobPlacements(buf)).toEqual([
+      { sector: 42, templateNumber: 0x123, dir: 3 },
+      { sector: 7, templateNumber: 5, dir: 0 },
+    ]);
   });
 });

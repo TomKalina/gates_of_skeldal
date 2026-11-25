@@ -1,5 +1,6 @@
 export const MOBS_INV = 16;
 export const MAX_MOBS = 255;
+export const MOB_START = 1;
 export const TMOB_SIZE = 380;
 
 export interface Mob {
@@ -114,4 +115,19 @@ export function parseMob(data: Uint8Array, offset = 0): Mob {
 export function parseMobTable(data: Uint8Array): Mob[] {
   const count = Math.floor(data.byteLength / TMOB_SIZE);
   return Array.from({ length: count }, (_, i) => parseMob(data, i * TMOB_SIZE));
+}
+
+export interface MobPlacement {
+  sector: number;
+  templateNumber: number;
+  dir: number;
+}
+
+export function parseMobPlacements(data: Uint8Array): MobPlacement[] {
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const count = Math.min(data.byteLength >> 2, MAX_MOBS - MOB_START);
+  return Array.from({ length: count }, (_, i) => {
+    const raw = v.getUint16(i * 4 + 2, true);
+    return { sector: v.getInt16(i * 4, true), templateNumber: raw & 0xfff, dir: (raw >> 14) & 0x3 };
+  });
 }
