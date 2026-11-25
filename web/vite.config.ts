@@ -70,6 +70,12 @@ export default defineConfig({
   plugins: [serveLocalGameData()],
   build: {
     target: 'es2022',
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        krypta: path.resolve(import.meta.dirname, 'krypta.html'),
+      },
+    },
   },
   test: {
     include: ['src/**/*.test.ts'],
