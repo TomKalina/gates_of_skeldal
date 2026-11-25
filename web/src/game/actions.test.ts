@@ -88,6 +88,6 @@ describe('applyAction', () => {
 
   it('returns false for an unhandled action code', () => {
     const map = testMap(SD_PRIM_VIS);
-    expect(applyAction(map, 0, 0, 4 /* A_RUN_PRIM, not ported here */)).toBe(false);
+    expect(applyAction(map, 0, 0, 99)).toBe(false);
   });
 });

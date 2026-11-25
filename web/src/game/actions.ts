@@ -18,11 +18,24 @@
 // in use (A_OPEN_CLOSE=3, the door; see map-file.ts's toggleDoor). These
 // are therefore verified against the C source directly and with synthetic
 // fixtures, not against real map data, unlike this port's rendering code.
-import { SD_PRIM_VIS, SD_SEC_VIS, sideAt, type DungeonMap } from '../formats/map-file';
+import {
+  SD_PRIM_ANIM,
+  SD_PRIM_FORV,
+  SD_PRIM_VIS,
+  SD_SEC_ANIM,
+  SD_SEC_FORV,
+  SD_SEC_VIS,
+  sideAt,
+  type DungeonMap,
+} from '../formats/map-file';
 
+export const A_OPEN_DOOR = 1;
+export const A_CLOSE_DOOR = 2;
+export const A_RUN_PRIM = 4;
 export const A_SHOW_PRIM = 5;
 export const A_HIDE_PRIM = 6;
 export const A_SHOW_HIDE_PRIM = 7;
+export const A_RUN_SEC = 8;
 export const A_SHOW_SEC = 9;
 export const A_HIDE_SEC = 10;
 export const A_SHOW_HIDE_SEC = 11;
@@ -38,6 +51,36 @@ export function applyAction(map: DungeonMap, sector: number, direction: number, 
   if (!side) return false;
 
   switch (action) {
+    case A_OPEN_DOOR: {
+      let ok = false;
+      if ((side.flags & SD_PRIM_FORV) === 0 && (side.flags & SD_PRIM_ANIM) === 0) {
+        side.flags |= SD_PRIM_FORV;
+        ok = true;
+      }
+      if ((side.flags & SD_SEC_FORV) === 0) {
+        side.flags |= SD_SEC_FORV;
+        ok = true;
+      }
+      return ok;
+    }
+    case A_CLOSE_DOOR: {
+      let ok = false;
+      if ((side.flags & SD_PRIM_FORV) !== 0 && (side.flags & SD_PRIM_ANIM) === 0) {
+        side.flags &= ~SD_PRIM_FORV;
+        ok = true;
+      }
+      if ((side.flags & SD_SEC_FORV) !== 0) {
+        side.flags &= ~SD_SEC_FORV;
+        ok = true;
+      }
+      return ok;
+    }
+    case A_RUN_PRIM:
+      side.flags |= SD_PRIM_ANIM;
+      return true;
+    case A_RUN_SEC:
+      side.flags |= SD_SEC_ANIM;
+      return true;
     case A_HIDE_PRIM:
       if ((side.flags & SD_PRIM_VIS) === 0) return false;
       side.flags &= ~SD_PRIM_VIS;
