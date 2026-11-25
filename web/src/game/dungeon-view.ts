@@ -139,8 +139,6 @@ const TOPBAR_BUTTONS = {
   uloz: { x: 145, y: 0, width: 60, height: TOPBAR_HEIGHT },
   obnov: { x: 205, y: 0, width: 60, height: TOPBAR_HEIGHT },
 } as const;
-// The blank strip past the last icon cell where the real game prints the
-// party's gold total — always 0 for now, there's no economy/loot system yet.
 const GOLD_TEXT_X = 540;
 
 // SIPKY.PCX (142x102): a diamond D-pad — up/down/left/right triangular
@@ -511,7 +509,6 @@ export function runDungeonView(
       ctx.fillStyle = '#111';
       ctx.fillRect(0, 0, canvas.width, TOPBAR_HEIGHT);
     }
-    // Gold count — always 0, there's no economy/loot system yet.
     ctx.font = '11px monospace';
     ctx.fillStyle = '#d9c88a';
     ctx.textBaseline = 'top';
@@ -534,9 +531,6 @@ export function runDungeonView(
     ctx.textBaseline = 'top';
     ctx.fillText(String(member.level), x + 3, y + PARTY_PORTRAIT_HEIGHT - 13);
 
-    // Three vertical resource bars right of the portrait — there's no
-    // combat/damage system yet, so every bar always reads full (matches a
-    // freshly rolled, undamaged party).
     const hp = encounter?.hp[index];
     const maxHp = encounter?.maxHp[index];
     const hpRatio = hp !== undefined && maxHp ? hp / maxHp : 1;
