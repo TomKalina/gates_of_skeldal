@@ -61,7 +61,7 @@ export function passageTextTrigger(map: DungeonMap, sector: number, dir: Directi
 // A_RUN_SEC/A_DISPLAY_TEXT/A_CODELOCK_LOG*/A_OPEN_TELEPORT/
 // A_CLOSE_TELEPORT/0) silently no-ops, matching actions.ts's own
 // documented pending scope.
-function runConfiguredAction(map: DungeonMap, sector: number, dir: number, action: number): boolean {
+export function runConfiguredAction(map: DungeonMap, sector: number, dir: number, action: number): boolean {
   if (action === A_OPEN_CLOSE) {
     toggleDoor(map, sector, dir);
     return true;

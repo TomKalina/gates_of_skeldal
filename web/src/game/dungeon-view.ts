@@ -1,4 +1,4 @@
-import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import { behind, canStep, computeVisibleGrid, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, runConfiguredAction, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
 import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
 import { readSave, writeSave } from './save';
@@ -7,6 +7,9 @@ import { faceThumbnail } from './portraits';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
 import { calcPoints, floorCeilBand, mapPos, wallCellBounds, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
+import { aliveMobs, healMember, mobsInSector, partyAlive, partyAttack, tickEncounter, type Encounter, type EncounterEvent } from './encounter';
+import { MA, MC, runMacros, textIndex, twoParms, type MacroAction, type MacroHost, type MacroTable } from './macros';
+import type { Mob } from './mobs';
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
@@ -23,6 +26,19 @@ export interface DungeonTextureSet {
   // by the raw 1-based item number (see dungeon.ts's FloorItem) — resolved
   // from ITEMS.DAT's TITEM.vzhled via items-file.ts.
   item: ReadonlyMap<number, ImageData>;
+  mob?: ReadonlyMap<number, ImageData>;
+}
+
+export interface Consumable {
+  heal?: number;
+  gold?: number;
+}
+
+export interface DungeonWorld {
+  encounter?: Encounter;
+  macros?: { table: MacroTable; states: Uint8Array };
+  consumables?: ReadonlyMap<number, Consumable>;
+  endings?: { victory: string; defeat: string };
 }
 
 // The real dungeon screen's chrome (TOPBAR.PCX, SIPKY.PCX) — all optional
@@ -195,6 +211,7 @@ export function runDungeonView(
   loadMap: MapLoader = () => Promise.resolve(null),
   initialLevelTexts: ReadonlyMap<number, string> = new Map(),
   inventoryAssets: InventoryAssets = {},
+  world: DungeonWorld = {},
 ): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
@@ -217,6 +234,8 @@ export function runDungeonView(
   let heldItem: number[] | null = null;
   let cursorX = -1000;
   let cursorY = -1000;
+  const encounter = world.encounter;
+  let ending: 'victory' | 'defeat' | null = null;
 
   let resolveResult!: () => void;
   const result = new Promise<void>((resolve) => {
@@ -469,6 +488,23 @@ export function runDungeonView(
     for (const item of cell.floorItems) drawFloorItem(cell, item);
   }
 
+  function drawMob(cell: ViewCell, mob: Mob): void {
+    const image = textures.mob?.get(mob.cisloVzoru);
+    if (!image) return;
+    const pos = mapPos(viewportGeometry, cell.lateral, cell.depth, 64, 40, 0);
+    const width = ((image.width * pos.scale) / 320) * perspectiveScaleX;
+    const height = ((image.height * pos.scale) / 320) * perspectiveScaleY;
+    const x = VIEWPORT.x + pos.x * perspectiveScaleX - width / 2;
+    const y = VIEWPORT.y + pos.y * perspectiveScaleY - height;
+    ctx.drawImage(toDrawable(image), x, y, width, height);
+    applyDepthShade(cell, x, y, width, height);
+  }
+
+  function drawMobs(cell: ViewCell): void {
+    if (!encounter || cell.depth === 0) return;
+    for (const mob of mobsInSector(encounter, cell.sector)) drawMob(cell, mob);
+  }
+
   function drawTopBar(): void {
     if (chrome.topbar) ctx.putImageData(chrome.topbar, 0, 0);
     else {
@@ -479,10 +515,10 @@ export function runDungeonView(
     ctx.font = '11px monospace';
     ctx.fillStyle = '#d9c88a';
     ctx.textBaseline = 'top';
-    ctx.fillText('0', GOLD_TEXT_X, 2);
+    ctx.fillText(String(encounter?.gold ?? 0), GOLD_TEXT_X, 2);
   }
 
-  function drawPartyBox(member: Character, x: number): void {
+  function drawPartyBox(member: Character, index: number, x: number): void {
     const y = BOTTOM_BAR.y;
     ctx.strokeStyle = '#555';
     ctx.strokeRect(x + 0.5, y + 0.5, PARTY_PORTRAIT_WIDTH, PARTY_PORTRAIT_HEIGHT);
@@ -501,12 +537,27 @@ export function runDungeonView(
     // Three vertical resource bars right of the portrait — there's no
     // combat/damage system yet, so every bar always reads full (matches a
     // freshly rolled, undamaged party).
-    let barX = x + PARTY_PORTRAIT_WIDTH + PARTY_BAR_GAP;
-    for (const color of ['#c96a2e', '#5aa552', '#3f7fc9']) {
-      ctx.fillStyle = color;
-      ctx.fillRect(barX, y, PARTY_BAR_WIDTH, PARTY_PORTRAIT_HEIGHT);
-      barX += PARTY_BAR_WIDTH + PARTY_BAR_GAP;
+    const hp = encounter?.hp[index];
+    const maxHp = encounter?.maxHp[index];
+    const hpRatio = hp !== undefined && maxHp ? hp / maxHp : 1;
+    if (hpRatio <= 0) {
+      ctx.fillStyle = 'rgba(40, 40, 40, 0.75)';
+      ctx.fillRect(x, y, PARTY_PORTRAIT_WIDTH, PARTY_PORTRAIT_HEIGHT);
+    } else if ((encounter?.memberCooldown[index] ?? 0) > 0) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.fillRect(x, y, PARTY_PORTRAIT_WIDTH, PARTY_PORTRAIT_HEIGHT);
     }
+
+    let barX = x + PARTY_PORTRAIT_WIDTH + PARTY_BAR_GAP;
+    ['#c96a2e', '#5aa552', '#3f7fc9'].forEach((color, bar) => {
+      const ratio = bar === 0 ? Math.max(0, hpRatio) : 1;
+      const height = PARTY_PORTRAIT_HEIGHT * ratio;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(barX, y, PARTY_BAR_WIDTH, PARTY_PORTRAIT_HEIGHT);
+      ctx.fillStyle = color;
+      ctx.fillRect(barX, y + PARTY_PORTRAIT_HEIGHT - height, PARTY_BAR_WIDTH, height);
+      barX += PARTY_BAR_WIDTH + PARTY_BAR_GAP;
+    });
 
     const stripY = y + PARTY_PORTRAIT_HEIGHT + PARTY_NAME_STRIP_GAP;
     const stripHeight = PARTY_BOX_HEIGHT - PARTY_PORTRAIT_HEIGHT - PARTY_NAME_STRIP_GAP;
@@ -557,7 +608,7 @@ export function runDungeonView(
     ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
 
     const positions = partyBoxPositions();
-    party.forEach((member, i) => drawPartyBox(member, positions[i]!));
+    party.forEach((member, i) => drawPartyBox(member, i, positions[i]!));
 
     const dpadOrig = dpadOrigin();
     const image = dpadImage();
@@ -610,11 +661,116 @@ export function runDungeonView(
     }
     for (const cell of byDepthDescending) {
       drawFloorItems(cell);
+      drawMobs(cell);
     }
 
     drawTopBar();
     drawBottomBar();
     drawHeldItemCursor();
+    drawEnding();
+  }
+
+  function drawEnding(): void {
+    if (!ending) return;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(VIEWPORT.x, VIEWPORT.y, VIEWPORT.width, VIEWPORT.height);
+    ctx.fillStyle = ending === 'victory' ? '#e8d48a' : '#e06060';
+    ctx.font = '20px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const text = ending === 'victory' ? (world.endings?.victory ?? 'Konec hry.') : (world.endings?.defeat ?? 'Družina padla.');
+    ctx.fillText(text, VIEWPORT.x + VIEWPORT.width / 2, VIEWPORT.y + VIEWPORT.height / 2);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+  }
+
+  function holdsItem(item: number): boolean {
+    if (heldItem?.some((held) => Math.abs(held) === item)) return true;
+    return party.some((member) => member.inv.includes(item) || member.wearing.includes(item));
+  }
+
+  let lockCancelled = false;
+
+  const macroHost: MacroHost = {
+    sideFlags: (side) => state.map.sides[side]?.flags ?? 0,
+    monsterInGame: () => (encounter ? aliveMobs(encounter).length > 0 : false),
+    monsterInRoom: (sector) => (encounter ? mobsInSector(encounter, sector).length > 0 : false),
+    haveItem: holdsItem,
+    testFlag: () => false,
+    random100: () => Math.floor(Math.random() * 100),
+    lastSendAction: 0,
+    exec: (action: MacroAction, side: number) => execMacro(action, side),
+  };
+
+  function execMacro(action: MacroAction, side: number): boolean | void {
+    if (action.action === MA.TEXTL) {
+      statusText = levelTexts.get(textIndex(action)) ?? '';
+      return;
+    }
+    if (action.action === MA.SENDA) {
+      const view = new DataView(action.data.buffer, action.data.byteOffset, action.data.byteLength);
+      runConfiguredAction(state.map, view.getUint16(4, true), view.getUint16(6, true), view.getUint16(8, true));
+      return;
+    }
+    if (action.action === MA.LOCK) {
+      const { parm1 } = twoParms(action);
+      if (holdsItem(parm1)) return false;
+      lockCancelled = true;
+      if (world.macros) runMacros(world.macros.table, world.macros.states, side, MC.LOCKINFO, macroHost);
+      return true;
+    }
+    if (action.action === MA.ENDGM) {
+      ending = 'victory';
+      return true;
+    }
+  }
+
+  function runSideMacros(side: number, flags: number): void {
+    if (world.macros) runMacros(world.macros.table, world.macros.states, side, flags, macroHost);
+  }
+
+  function describe(event: EncounterEvent): string {
+    const name = (member: number) => party[member]?.name ?? '';
+    switch (event.kind) {
+      case 'mobHit':
+        return `${event.mob.name} zraní: ${name(event.member)} -${event.damage}`;
+      case 'mobMiss':
+        return `${event.mob.name} minul: ${name(event.member)}`;
+      case 'memberHit':
+        return event.killed ? `${name(event.member)} skolil: ${event.mob.name}` : `${name(event.member)} zasáhl: ${event.mob.name} -${event.damage}`;
+      case 'memberMiss':
+        return `${name(event.member)} minul: ${event.mob.name}`;
+      case 'noTarget':
+        return `${name(event.member)}: není na koho útočit.`;
+      case 'mobMoved':
+        return '';
+    }
+  }
+
+  function attackWith(member: number): void {
+    if (!encounter || ending) return;
+    const event = partyAttack(encounter, state.map, state.sector, state.direction, member);
+    if (!event) return;
+    statusText = describe(event);
+    draw();
+  }
+
+  function consumeHeld(member: number): boolean {
+    const item = heldItem?.length === 1 ? heldItem[0] : undefined;
+    const consumable = item !== undefined ? world.consumables?.get(item) : undefined;
+    if (!consumable || !encounter) return false;
+    if (consumable.gold) {
+      encounter.gold += consumable.gold;
+      statusText = `Zlato +${consumable.gold}`;
+    }
+    if (consumable.heal) {
+      const healed = healMember(encounter, member, consumable.heal);
+      if (healed <= 0) return false;
+      statusText = `${party[member]?.name ?? ''} +${healed} životů`;
+    }
+    heldItem = null;
+    draw();
+    return true;
   }
 
   // engine1.c's own picked_item cursor draw: the held group's real (first,
@@ -669,6 +825,7 @@ export function runDungeonView(
       return;
     }
     // Nastavení and the icon cells have no system to open yet.
+    if (ending) return;
 
     // game/clk_map.c: pick_item_'s rects are registered BEFORE the catch-all
     // clk_touch rect, so they get dispatch priority — checked here ahead of
@@ -698,11 +855,16 @@ export function runDungeonView(
     // their portrait box — real inv.c's start_invetory else-branch (the
     // if-branch, switching the open inventory screen to the clicked member,
     // isn't wired: inventoryOpen always shows party[0], see its own comment).
-    if (heldItem) {
+    {
       const positions = partyBoxPositions();
       for (let i = 0; i < party.length; i++) {
         const boxRect = { x: positions[i]!, y: BOTTOM_BAR.y, width: PARTY_BOX_WIDTH, height: PARTY_BOX_HEIGHT };
         if (rectContains(boxRect, x, y)) {
+          if (!heldItem) {
+            attackWith(i);
+            return;
+          }
+          if (consumeHeld(i)) return;
           const member = party[i]!;
           const { character, leftover } = depositItems(member, heldItem);
           party = party.map((m, idx) => (idx === i ? character : m));
@@ -728,8 +890,14 @@ export function runDungeonView(
     // sprite-bbox case (a door's own art is usually smaller than the full
     // wall), but far closer than accepting anywhere in the viewport.
     if (rectContains(rectAtDepthLateral(1, 0), x, y)) {
+      lockCancelled = false;
+      runSideMacros(state.sector * 4 + state.direction, MC.TOUCHSUC);
+      if (lockCancelled) {
+        draw();
+        return;
+      }
       const touch = touchFrontWall(state.map, state.sector, state.direction);
-      if (touch.changed || touch.textIndex !== undefined) {
+      if (touch.changed || touch.textIndex !== undefined || world.macros) {
         if (touch.textIndex !== undefined) statusText = levelTexts.get(touch.textIndex) ?? '';
         draw();
       }
@@ -811,9 +979,15 @@ export function runDungeonView(
       void performTransition(transition);
       return;
     }
-    const textIndex = passageTextTrigger(state.map, state.sector, dir);
+    if (ending) return;
+    const side = state.sector * 4 + dir;
+    const passable = canStep(state.map, state.sector, dir);
+    const blockedByMob = passable && encounter !== undefined && mobsInSector(encounter, state.map.sectors[state.sector]?.stepNext[dir] ?? 0).length > 0;
+    if (blockedByMob) return;
+    const passText = passageTextTrigger(state.map, state.sector, dir);
     state = step(state);
-    statusText = textIndex !== undefined ? (levelTexts.get(textIndex) ?? '') : '';
+    statusText = passText !== undefined ? (levelTexts.get(passText) ?? '') : '';
+    runSideMacros(side, passable ? MC.PASSSUC : MC.PASSFAIL);
     draw();
   }
 
@@ -845,6 +1019,14 @@ export function runDungeonView(
         inventoryOpen = true;
         draw();
         return;
+      case 'Digit1':
+      case 'Digit2':
+      case 'Digit3':
+      case 'Digit4':
+      case 'Digit5':
+      case 'Digit6':
+        attackWith(Number(e.code.slice(5)) - 1);
+        return;
       default:
         return;
     }
@@ -866,7 +1048,15 @@ export function runDungeonView(
     if (now - lastTickAt < TICK_MS) return;
     lastTickAt = now;
     pumpTick();
-    if (stepAllAnimations(state.map)) draw();
+    let changed = stepAllAnimations(state.map);
+    if (encounter && !ending) {
+      const events = tickEncounter(encounter, state.map, state.sector);
+      const message = events.map(describe).filter(Boolean).pop();
+      if (message) statusText = message;
+      if (!partyAlive(encounter)) ending = 'defeat';
+      if (events.length > 0 || encounter.memberCooldown.some((c) => c > 0)) changed = true;
+    }
+    if (changed) draw();
   }
 
   function dispose(): void {

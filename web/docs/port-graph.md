@@ -1254,6 +1254,24 @@ parity vs C build where applicable). Updated as issues close.
       live), clicking the same floor rect again puts the leftover back
       (sprite reappears, "Odloženo.").
 
+- Real-time encounter layer (`src/game/encounter.ts`, wired into
+  `dungeon-view.ts` through the optional `DungeonWorld` argument, first used by
+  the Krypta Rovenska level in `src/krypta/`). Deliberate simplifications vs
+  `souboje.c`/`enemy.c`: no turn-based battle mode (`rozhodniOPoradi`, action
+  planning, battle panel); mobs act on the dungeon tick with `mob.speed` read as
+  ticks between actions; a mob chases when `findPath` (blocked by
+  `SD_MONST_IMPS|SD_PLAY_IMPS`) finds the party within `mob.dohled` steps and
+  attacks from an adjacent sector via `vypocetZasahu`; party members attack the
+  first mob straight ahead within a per-member reach, with a per-member cooldown
+  (portrait click or keys 1–6). Party HP lives in the encounter (not saved).
+  Killed mobs drop `mob.inv` onto the floor pile facing the party. Macro support
+  covers `MA_TEXTL`, `MA_SENDA`, `MA_LOCK` (key checked in backpacks, not on the
+  cursor like `if_lock`) and `MA_ENDGM`; `MC_TOUCHSUC` macros run *before* the
+  side's configured action so a lock can veto it (C runs the action first and
+  locked doors use action 0 + `MA_SENDA`, relying on `change_bits`/`flag_map`
+  for passability, which the port's `animation.ts` does not model). Real maps do
+  not load `A_MAPMACR` into this VM yet.
+
 ## game/ (target `skeldal_main`, issue #10–#17 range)
 
 | C source | Purpose | Planned TS home | Status |
