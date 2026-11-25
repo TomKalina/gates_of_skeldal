@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { A_OPEN_CLOSE, SD_PLAY_IMPS, SD_SEC_VIS, sideAt } from '../formats/map-file';
 import { canStep, passageTextTrigger, stepForward, touchFrontWall, type Direction } from '../game/dungeon';
 import { stepAllAnimations } from '../game/animation';
-import { buildKryptaMap, FLOOR_STAIRS, TEX_DOOR, TEX_GRATE } from './map';
+import { MA, MC, runMacros, textIndex, twoParms, type MacroHost } from '../game/macros';
+import { buildKryptaMap, FLOOR_STAIRS, ITEM_KEY, TEX_DOOR, TEX_GRATE, TEXT_GRATE_LOCKED, TEXT_GRATE_OPENED } from './map';
 
 describe('buildKryptaMap', () => {
   it('starts on the S cell facing east with a walkable corridor ahead', () => {
@@ -46,10 +47,54 @@ describe('buildKryptaMap', () => {
     expect(stepForward(state).sector).toBe(sectorAt(5, 3));
   });
 
-  it('textures the grate wall and marks the stairs floor', () => {
+  it('puts a closed grate between the corridor and the stairs cell', () => {
     const { map, sectorAt } = buildKryptaMap();
-    expect(sideAt(map, sectorAt(13, 9)!, 2)!.prim).toBe(TEX_GRATE);
+    const above = sectorAt(13, 9)!;
+    expect(sideAt(map, above, 2)!.sec).toBe(TEX_GRATE);
+    expect(canStep(map, above, 2)).toBe(false);
     expect(map.sectors[sectorAt(14, 10)!]!.floor).toBe(FLOOR_STAIRS);
+    expect(canStep(map, sectorAt(13, 10)!, 1)).toBe(true);
+  });
+
+  it('runs the grate lock macro: locked text without the key, opening text with it', () => {
+    const { map, macros, sectorAt } = buildKryptaMap();
+    const side = sectorAt(13, 9)! * 4 + 2;
+    const run = (hasKey: boolean) => {
+      const texts: number[] = [];
+      const host: MacroHost = {
+        sideFlags: (s) => map.sides[s]!.flags,
+        monsterInGame: () => false,
+        monsterInRoom: () => false,
+        haveItem: (item) => hasKey && item === ITEM_KEY,
+        testFlag: () => false,
+        random100: () => 0,
+        lastSendAction: 0,
+        exec: (action, at) => {
+          if (action.action === MA.TEXTL) texts.push(textIndex(action));
+          if (action.action === MA.LOCK) {
+            if (host.haveItem(twoParms(action).parm1)) return false;
+            runMacros(macros, new Uint8Array(macros.count), at, MC.LOCKINFO, host);
+            return true;
+          }
+        },
+      };
+      runMacros(macros, new Uint8Array(macros.count), side, MC.TOUCHSUC, host);
+      return texts;
+    };
+    expect(run(false)).toEqual([TEXT_GRATE_LOCKED]);
+    expect(run(true)).toEqual([TEXT_GRATE_OPENED]);
+  });
+
+  it('ends the game when passing from the grate cell onto the stairs', () => {
+    const { macros, sectorAt } = buildKryptaMap();
+    const list = macros.records.get(sectorAt(13, 10)! * 4 + 1)!;
+    expect(list.map((a) => [a.action, a.flags])).toEqual([[MA.ENDGM, MC.PASSSUC]]);
+  });
+
+  it('spawns mobs from the layout and places loot on the floor', () => {
+    const { map, mobSpawns, sectorAt } = buildKryptaMap();
+    expect(mobSpawns.map((s) => s.kind).sort()).toEqual(['c', 'c', 'r', 's', 's']);
+    expect(map.placedItems.get(sectorAt(14, 1)! * 4 + 1)).toEqual([ITEM_KEY]);
   });
 
   it('wires flavour texts to passable sides', () => {

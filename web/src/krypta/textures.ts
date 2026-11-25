@@ -1,6 +1,7 @@
 import type { DungeonTextureSet } from '../game/dungeon-view';
 import { calcPoints, floorCeilBand, VIEW_SIZE_X, VIEW_SIZE_Y, VIEW3D_Z, wallCellBounds, type Edge } from '../game/perspective';
-import { CEIL_VAULT, DOOR_FRAMES, FLOOR_SLABS, FLOOR_STAIRS, TEX_DOOR, TEX_GRATE, TEX_LEVER, TEX_MOSS, TEX_STONE } from './map';
+import { CEIL_VAULT, DOOR_FRAMES, FLOOR_SLABS, FLOOR_STAIRS, ITEM_GOLD, ITEM_KEY, ITEM_POTION, TEX_DOOR, TEX_GRATE, TEX_LEVER, TEX_MOSS, TEX_STONE } from './map';
+import { MOB_SPRITE_CULTIST, MOB_SPRITE_RAT, MOB_SPRITE_SKELETON } from './actors';
 
 const WALL = 128;
 type Rgb = readonly [number, number, number];
@@ -53,14 +54,17 @@ function stonePainter(seed: number, moss: boolean): Painter {
   return (u, v) => ({ c: brick(u, v, seed, moss), a: 255 });
 }
 
-function gratePainter(): Painter {
+function gratePainter(frame: number): Painter {
   const stone = stonePainter(4, false);
+  const lift = (frame / (DOOR_FRAMES - 1)) * 0.92;
   return (u, v) => {
     if (u > 0.12 && u < 0.88 && v > 0.08) {
-      const bar = (u * 7) % 1 < 0.22 || (v > 0.3 && v < 0.36) || (v > 0.7 && v < 0.76);
+      const gv = v + lift;
+      if (frame === DOOR_FRAMES - 1 || gv > 1) return { c: [0, 0, 0], a: 0 };
+      const bar = (u * 7) % 1 < 0.22 || (gv > 0.3 && gv < 0.36) || (gv > 0.7 && gv < 0.76);
       if (bar) return { c: [52, 52, 60], a: 255 };
-      if (u > 0.66 && u < 0.76 && v > 0.46 && v < 0.58) return { c: [200, 164, 72], a: 255 };
-      return { c: [6, 6, 8], a: 255 };
+      if (u > 0.66 && u < 0.76 && gv > 0.46 && gv < 0.58) return { c: [200, 164, 72], a: 255 };
+      return { c: [0, 0, 0], a: 0 };
     }
     return stone(u, v);
   };
@@ -231,10 +235,12 @@ export function createKryptaTextures(): DungeonTextureSet {
   const painters = new Map<number, Painter>([
     [TEX_STONE, stonePainter(1, false)],
     [TEX_MOSS, stonePainter(5, true)],
-    [TEX_GRATE, gratePainter()],
     [TEX_LEVER, leverPainter()],
   ]);
-  for (let f = 0; f < DOOR_FRAMES; f++) painters.set(TEX_DOOR + f, doorPainter(f));
+  for (let f = 0; f < DOOR_FRAMES; f++) {
+    painters.set(TEX_DOOR + f, doorPainter(f));
+    painters.set(TEX_GRATE + f, gratePainter(f));
+  }
 
   const main = new Map<number, ImageData>();
   const left = new Map<number, ImageData>();
@@ -256,6 +262,115 @@ export function createKryptaTextures(): DungeonTextureSet {
     ceil: new Map([[CEIL_VAULT, paintPlane(1, vault)]]),
     archLeft: new Map(),
     archRight: new Map(),
-    item: new Map(),
+    item: createItemSprites(),
+    mob: createMobSprites(),
   };
+}
+
+type Sketch = (c: CanvasRenderingContext2D) => void;
+
+function sketch(width: number, height: number, draw: Sketch): ImageData {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const c = canvas.getContext('2d');
+  if (!c) throw new Error('2D canvas context unavailable');
+  draw(c);
+  return c.getImageData(0, 0, width, height);
+}
+
+function ellipse(c: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, color: string): void {
+  c.fillStyle = color;
+  c.beginPath();
+  c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  c.fill();
+}
+
+function createItemSprites(): Map<number, ImageData> {
+  return new Map([
+    [ITEM_KEY, sketch(48, 24, (c) => {
+      c.strokeStyle = '#d8b04a';
+      c.lineWidth = 4;
+      c.beginPath();
+      c.arc(10, 12, 7, 0, Math.PI * 2);
+      c.moveTo(17, 12);
+      c.lineTo(44, 12);
+      c.moveTo(36, 12);
+      c.lineTo(36, 20);
+      c.moveTo(42, 12);
+      c.lineTo(42, 19);
+      c.stroke();
+    })],
+    [ITEM_POTION, sketch(28, 40, (c) => {
+      ellipse(c, 14, 27, 12, 12, '#7d2a3a');
+      ellipse(c, 10, 23, 3, 3, '#d26a7a');
+      c.fillStyle = '#b8b8c0';
+      c.fillRect(10, 4, 8, 12);
+      c.fillStyle = '#6b4a2a';
+      c.fillRect(9, 0, 10, 5);
+    })],
+    [ITEM_GOLD, sketch(40, 24, (c) => {
+      for (const [x, y] of [[10, 16], [22, 17], [30, 15], [16, 10], [26, 9]] as const) {
+        ellipse(c, x, y, 8, 5, '#a8841e');
+        ellipse(c, x, y - 1, 7, 4, '#e8c84a');
+      }
+    })],
+  ]);
+}
+
+function createMobSprites(): Map<number, ImageData> {
+  return new Map([
+    [MOB_SPRITE_RAT, sketch(120, 64, (c) => {
+      c.strokeStyle = '#8a6a6a';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.moveTo(18, 52);
+      c.quadraticCurveTo(0, 40, 6, 22);
+      c.stroke();
+      ellipse(c, 56, 46, 38, 18, '#4a3f38');
+      ellipse(c, 94, 42, 18, 13, '#544840');
+      ellipse(c, 86, 28, 7, 8, '#6a5a50');
+      ellipse(c, 104, 40, 3, 3, '#ff4030');
+      ellipse(c, 112, 46, 3, 2, '#c08080');
+      c.fillStyle = '#3a302a';
+      c.fillRect(36, 58, 8, 6);
+      c.fillRect(72, 58, 8, 6);
+    })],
+    [MOB_SPRITE_SKELETON, sketch(110, 230, (c) => {
+      c.fillStyle = '#d8d0b8';
+      ellipse(c, 55, 26, 20, 23, '#d8d0b8');
+      ellipse(c, 47, 24, 5, 6, '#201810');
+      ellipse(c, 63, 24, 5, 6, '#201810');
+      c.fillRect(52, 49, 6, 80);
+      for (let i = 0; i < 5; i++) c.fillRect(34, 62 + i * 11, 42, 4);
+      c.fillRect(30, 58, 6, 70);
+      c.fillRect(74, 58, 6, 70);
+      c.fillRect(36, 128, 38, 8);
+      c.fillRect(38, 136, 7, 92);
+      c.fillRect(65, 136, 7, 92);
+      c.fillStyle = '#7a7a84';
+      c.fillRect(82, 40, 5, 110);
+      c.fillRect(74, 120, 21, 5);
+    })],
+    [MOB_SPRITE_CULTIST, sketch(120, 240, (c) => {
+      c.fillStyle = '#2a1830';
+      c.beginPath();
+      c.moveTo(60, 8);
+      c.lineTo(100, 70);
+      c.lineTo(112, 240);
+      c.lineTo(8, 240);
+      c.lineTo(20, 70);
+      c.closePath();
+      c.fill();
+      ellipse(c, 60, 46, 17, 20, '#0c0810');
+      ellipse(c, 53, 46, 3, 2, '#e0c040');
+      ellipse(c, 67, 46, 3, 2, '#e0c040');
+      c.fillStyle = '#6a1a1a';
+      c.fillRect(56, 90, 8, 120);
+      c.fillRect(40, 120, 40, 8);
+      ellipse(c, 100, 120, 7, 9, '#f0d070');
+      c.fillStyle = '#e8e0c8';
+      c.fillRect(97, 128, 6, 26);
+    })],
+  ]);
 }
