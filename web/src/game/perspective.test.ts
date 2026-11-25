@@ -1,0 +1,153 @@
+import { describe, expect, it } from 'vitest';
+import { calcPoints, floorCeilBand, mapPos, MIDDLE_X, MIDDLE_Y, VIEW3D_X, VIEW3D_Z, wallCellBounds } from './perspective';
+
+describe('calcPoints', () => {
+  const geometry = calcPoints();
+
+  it('produces VIEW3D_X+1 lateral columns, each with VIEW3D_Z+1 depth points per edge', () => {
+    expect(geometry).toHaveLength(VIEW3D_X + 1);
+    for (const column of geometry) {
+      expect(column).toHaveLength(2);
+      expect(column[0]).toHaveLength(VIEW3D_Z + 1);
+      expect(column[1]).toHaveLength(VIEW3D_Z + 1);
+    }
+  });
+
+  it('seeds lateral column 0 at the source constants and decays y by truncating v -= v/3.33', () => {
+    // Hand-computed from the exact same recurrence (v = trunc(v - v/3.33)):
+    // 305 -> 213 -> 149 -> 104 -> 72 -> 50.
+    const floorY = geometry[0]![0]!.map((p) => p.y);
+    expect(floorY).toEqual([305, 213, 149, 104, 72, 50]);
+    // -150 -> -104 -> -72 -> -50 -> -34 -> -23 (truncation toward zero).
+    const ceilY = geometry[0]![1]!.map((p) => p.y);
+    expect(ceilY).toEqual([-150, -104, -72, -50, -34, -23]);
+  });
+
+  it('decays x by the same recurrence, seeded per lateral column at 357*(1+2j)', () => {
+    // j=0: 357 -> 249 -> 174 -> 121 -> 84 -> 58.
+    const x0 = geometry[0]![0]!.map((p) => p.x);
+    expect(x0).toEqual([357, 249, 174, 121, 84, 58]);
+    // j=1 seed is 357+2*357*1=1071, same ratio thereafter.
+    expect(geometry[1]![0]![0]!.x).toBe(1071);
+  });
+
+  it('never depends on lateral column for the y sequence (only x seeds differ by column)', () => {
+    for (let j = 1; j <= VIEW3D_X; j++) {
+      expect(geometry[j]![0]!.map((p) => p.y)).toEqual(geometry[0]![0]!.map((p) => p.y));
+      expect(geometry[j]![1]!.map((p) => p.y)).toEqual(geometry[0]![1]!.map((p) => p.y));
+    }
+  });
+});
+
+describe('floorCeilBand', () => {
+  const geometry = calcPoints();
+
+  it('the center-column floor band at depth 0 spans from the near-plane seed down toward the horizon', () => {
+    const band = floorCeilBand(geometry, 0, 0, 0);
+    // rowNear = y(depth0) + MIDDLE_Y = 305 + 112 = 417 (below the real
+    // engine's 360-tall viewport — clipped by the caller, same as the
+    // source's own `if (y<1) y=1` clamp on the *other* side).
+    expect(band.rowNear).toBe(305 + MIDDLE_Y);
+    expect(band.rowFar).toBe(213 + MIDDLE_Y);
+    // Center column: xl/xr are a symmetric +-357 seed at depth 0 (the
+    // near-plane, undecayed fan), reprojected by (y+1)/305 at the near row.
+    expect(band.xlNear).toBeCloseTo((-357 * (305 + 1)) / 305 + 320, 6);
+    expect(band.xrNear).toBeCloseTo((357 * (305 + 1)) / 305 + 320, 6);
+  });
+
+  it('the ceiling band at depth 0 sits above the horizon (negative y, row < MIDDLE_Y)', () => {
+    const band = floorCeilBand(geometry, 0, 0, 1);
+    expect(band.rowNear).toBe(-150 + MIDDLE_Y);
+    expect(band.rowFar).toBe(-104 + MIDDLE_Y);
+    expect(band.rowNear).toBeLessThan(MIDDLE_Y);
+  });
+
+  it('a left lateral cell mirrors a right one across the center column (MIDDLE_X)', () => {
+    const left = floorCeilBand(geometry, 1, -1, 0);
+    const right = floorCeilBand(geometry, 1, 1, 0);
+    expect(left.xlNear).toBeCloseTo(2 * MIDDLE_X - right.xrNear, 6);
+    expect(left.xrNear).toBeCloseTo(2 * MIDDLE_X - right.xlNear, 6);
+    expect(left.rowNear).toBe(right.rowNear);
+    expect(left.rowFar).toBe(right.rowFar);
+  });
+
+  it('bands narrow with depth as the geometry decays toward the horizon', () => {
+    const near = floorCeilBand(geometry, 0, 1, 0);
+    const far = floorCeilBand(geometry, 4, 1, 0);
+    expect(near.xrNear - near.xlNear).toBeGreaterThan(far.xrNear - far.xlNear);
+  });
+});
+
+describe('wallCellBounds', () => {
+  const geometry = calcPoints();
+
+  it('the center column at depth 0 spans the undecayed +-357 seed around MIDDLE_X', () => {
+    const bounds = wallCellBounds(geometry, 0, 0);
+    expect(bounds.xl).toBe(-357 + MIDDLE_X);
+    expect(bounds.xr).toBe(357 + MIDDLE_X);
+  });
+
+  it('uses the direct per-depth decay, not a depth-0 reprojection (unlike floorCeilBand)', () => {
+    // x1 decays 357 -> 249 -> 174 -> ... (same recurrence as calcPoints'
+    // own test); depth 2's bound must equal that decayed value directly,
+    // not 357 scaled by some y-ratio.
+    const bounds = wallCellBounds(geometry, 2, 0);
+    expect(bounds.xr).toBe(174 + MIDDLE_X);
+  });
+
+  it('yTop/yBottom come from the ceiling/floor edge y at that exact depth', () => {
+    const bounds = wallCellBounds(geometry, 1, 0);
+    expect(bounds.yTop).toBe(-104 + MIDDLE_Y);
+    expect(bounds.yBottom).toBe(213 + MIDDLE_Y);
+  });
+
+  it('a left lateral cell mirrors a right one across MIDDLE_X', () => {
+    const left = wallCellBounds(geometry, 2, -1);
+    const right = wallCellBounds(geometry, 2, 1);
+    expect(left.xl).toBeCloseTo(2 * MIDDLE_X - right.xr, 6);
+    expect(left.xr).toBeCloseTo(2 * MIDDLE_X - right.xl, 6);
+    expect(left.yTop).toBe(right.yTop);
+    expect(left.yBottom).toBe(right.yBottom);
+  });
+
+  it('cells narrow with depth as the geometry decays toward the horizon', () => {
+    const near = wallCellBounds(geometry, 0, 1);
+    const far = wallCellBounds(geometry, 4, 1);
+    expect(near.xr - near.xl).toBeGreaterThan(far.xr - far.xl);
+    expect(near.yBottom - near.yTop).toBeGreaterThan(far.yBottom - far.yTop);
+  });
+});
+
+describe('mapPos', () => {
+  const geometry = calcPoints();
+  const CTVR = 128;
+
+  it('centers x at MIDDLE_X and y at the floor row when posx is half of CTVR and posy/posz are 0', () => {
+    const pos = mapPos(geometry, 0, 0, CTVR / 2, 0, 0);
+    expect(pos.x).toBe(MIDDLE_X);
+    expect(pos.y).toBe(305 + MIDDLE_Y);
+    // last_scale at posy=0 is just p1: floorY(0)-ceilY(0) = 305-(-150).
+    expect(pos.scale).toBe(305 - -150);
+  });
+
+  it('lifts y upward (decreasing) as posz increases, scaled by the local wall height', () => {
+    const onFloor = mapPos(geometry, 0, 0, CTVR / 2, 0, 0);
+    const lifted = mapPos(geometry, 0, 0, CTVR / 2, 0, 64);
+    expect(lifted.y).toBeLessThan(onFloor.y);
+  });
+
+  it('sweeps x from the cell\'s left edge to its right edge as posx goes 0 -> CTVR (matches wallCellBounds at posy=0)', () => {
+    const bounds = wallCellBounds(geometry, 0, 1);
+    expect(mapPos(geometry, 1, 0, 0, 0, 0).x).toBe(bounds.xl);
+    expect(mapPos(geometry, 1, 0, CTVR, 0, 0).x).toBe(bounds.xr);
+  });
+
+  it('mirrors a left lateral cell against the equivalent right one (posx mirrored to CTVR-posx)', () => {
+    const posx = 30;
+    const left = mapPos(geometry, -1, 2, CTVR - posx, 40, 0);
+    const right = mapPos(geometry, 1, 2, posx, 40, 0);
+    expect(left.x).toBe(2 * MIDDLE_X - right.x);
+    expect(left.y).toBe(right.y);
+    expect(left.scale).toBe(right.scale);
+  });
+});

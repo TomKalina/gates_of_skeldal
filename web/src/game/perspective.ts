@@ -1,0 +1,248 @@
+// engine1.c's calc_points() + create_tables()'s floor/ceiling loops
+// (game/engine1.c — the real, actively-built engine1.c; libs/engine1.c is a
+// smaller, unused legacy copy, confirmed absent from every CMakeLists.txt).
+//
+// The real renderer precomputes, once, a `viewport_geometry[j][edge][i]`
+// table: for each lateral boundary `j` (0..VIEW3D_X) and edge (0=floor,
+// 1=ceiling), a sequence of `{x,y}` points decaying geometrically over
+// depth `i` (0..VIEW3D_Z) via `v -= v/FACTOR_3D` (truncating), seeded from
+// `START_X1`/`START_Y1`/`START_X2`/`START_Y2`. This is a real iterative
+// integer-truncating decay, not a closed-form `pow` — replicated exactly
+// (`Math.trunc` matches C's `(int)` cast: both truncate toward zero).
+//
+// `create_tables()` then builds per-scanline floor/ceiling blit tables
+// (`f_table`/`c_table`) from this geometry, one entry per *screen row*,
+// precomputing an exact source/destination byte offset for a straight
+// memcpy (`engine2.c`'s `fcdraw`) — a DOS-era optimization for O(1)
+// per-scanline blitting. Floor/ceiling textures turn out to be pre-baked,
+// screen-sized perspective art (640x199 for floor, 640x93 for ceiling —
+// verified against LESPRED.MAP's real LES1F01A.PCX/LES1C01A.PCX), copied
+// at *native scale* with no runtime stretching: `txtrofs`'s formula is a
+// constant *offset* from `lineofs`, not a ratio, so texture row R always
+// lands on the same screen row R+const for every depth cell that shares a
+// texture. What varies per depth/lateral cell is only the *clip
+// region* (`xl`/`xr`, reprojected per-row from the undecayed near-plane
+// fan) — each visible cell reveals its own sector's texture within its own
+// trapezoid, mirroring exactly how this port already clips wall side-
+// textures (`dungeon-view.ts`'s `drawSideWall`). This module ports that
+// same geometry (`calcPoints`, `floorCeilBand`) for Canvas2D: draw each
+// texture once at native scale, clipped to a per-cell trapezoid, instead
+// of replicating the scanline-table/memcpy technique itself.
+//
+// Phase B2 (see docs/EXECUTION-PLAN.md) adds real wall geometry
+// (`wallCellBounds`, below) on the same `viewport_geometry`, replacing
+// `dungeon-view.ts`'s old `DEPTH_SCALE` closed-form approximation — floor/
+// ceiling and walls now derive from the identical source table, so they
+// meet at the same pixel by construction instead of two independently-
+// approximated shapes happening to look close. `show_cel2`'s `plac`
+// (`SD_POSITION`) anchoring and native-size blitting (vs. this port's
+// Canvas2D stretch) remain unported — see port-graph.md for the gap.
+
+export const VIEW3D_X = 4;
+export const VIEW3D_Z = 5;
+const START_X1 = 357;
+const START_Y1 = 305;
+const START_X2 = 357;
+const START_Y2 = -150;
+const FACTOR_3D = 3.33;
+
+// engine1.h
+export const VIEW_SIZE_X = 640;
+export const VIEW_SIZE_Y = 360;
+export const MIDDLE_X = 320;
+export const MIDDLE_Y = 112;
+
+export interface ViewPoint {
+  x: number;
+  y: number;
+}
+
+// [lateral boundary j: 0..VIEW3D_X][edge: 0=floor, 1=ceiling][depth i: 0..VIEW3D_Z]
+export type ViewportGeometry = readonly ViewPoint[][][];
+
+export function calcPoints(): ViewportGeometry {
+  const geometry: ViewPoint[][][] = [];
+  for (let j = 0; j <= VIEW3D_X; j++) {
+    let x1 = START_X1 + 2 * START_X1 * j;
+    let y1 = START_Y1;
+    let x2 = START_X2 + 2 * START_X1 * j;
+    let y2 = START_Y2;
+    const floorEdge: ViewPoint[] = [];
+    const ceilEdge: ViewPoint[] = [];
+    for (let i = 0; i <= VIEW3D_Z; i++) {
+      floorEdge.push({ x: x1, y: y1 });
+      ceilEdge.push({ x: x2, y: y2 });
+      x2 = Math.trunc(x2 - x2 / FACTOR_3D);
+      y2 = Math.trunc(y2 - y2 / FACTOR_3D);
+      x1 = Math.trunc(x1 - x1 / FACTOR_3D);
+      y1 = Math.trunc(y1 - y1 / FACTOR_3D);
+    }
+    geometry.push([floorEdge, ceilEdge]);
+  }
+  return geometry;
+}
+
+export type Edge = 0 | 1;
+
+// create_tables()'s xl/xr picking logic for lateral column `x` against
+// `strd = CF_XMAP_SIZE>>1` (the center column), rewritten in terms of a
+// signed lateral cell offset (0 = center, negative = left, positive =
+// right) instead of the 0-based CF_XMAP_SIZE column index — same three
+// cases (left/center/right), same near-plane (depth-0) fan lookup.
+function lateralXSeeds(geometry: ViewportGeometry, edge: Edge, lateral: number): { xl: number; xr: number } {
+  if (lateral === 0) {
+    const v = geometry[0]![edge]![0]!.x;
+    return { xl: -v, xr: v };
+  }
+  if (lateral < 0) {
+    const k = -lateral;
+    return { xl: -geometry[k]![edge]![0]!.x, xr: -geometry[k - 1]![edge]![0]!.x };
+  }
+  const k = lateral;
+  return { xl: geometry[k - 1]![edge]![0]!.x, xr: geometry[k]![edge]![0]!.x };
+}
+
+export interface FloorCeilBand {
+  // Fractions of VIEW_SIZE_Y/VIEW_SIZE_X — caller scales into its own
+  // viewport rect (this port's viewport isn't pixel-identical to the real
+  // engine's 640x360, so everything here is resolution-independent).
+  rowNear: number;
+  rowFar: number;
+  xlNear: number;
+  xrNear: number;
+  xlFar: number;
+  xrFar: number;
+}
+
+// Reprojects a depth cell's floor/ceiling trapezoid from the real engine's
+// geometry: near/far screen rows come straight from the geometry's y-decay
+// at depth `d`/`d+1` (`row = y + MIDDLE_Y`, same formula the source uses
+// for both f_table and c_table's `lineofs`); left/right bounds come from
+// the undecayed near-plane (depth-0) lateral fan, reprojected per-row by
+// the ratio of that row's y to the near-plane's own y (`create_tables`'
+// `xl*(y1+K)/geometry[0][edge][0].y+MIDDLE_X`, K=+1 for floor, -2 for
+// ceiling — both fudge constants preserved exactly as in the source).
+export function floorCeilBand(geometry: ViewportGeometry, depth: number, lateral: number, edge: Edge): FloorCeilBand {
+  const yNear = geometry[0]![edge]![depth]!.y;
+  const yFar = geometry[0]![edge]![depth + 1]!.y;
+  const y0 = geometry[0]![edge]![0]!.y;
+  const k = edge === 0 ? 1 : -2;
+  const { xl, xr } = lateralXSeeds(geometry, edge, lateral);
+  const reproject = (seed: number, y: number) => (seed * (y + k)) / y0 + MIDDLE_X;
+  return {
+    rowNear: yNear + MIDDLE_Y,
+    rowFar: yFar + MIDDLE_Y,
+    xlNear: reproject(xl, yNear),
+    xrNear: reproject(xr, yNear),
+    xlFar: reproject(xl, yFar),
+    xrFar: reproject(xr, yFar),
+  };
+}
+
+// Phase B2: real wall geometry, replacing the closed-form DEPTH_SCALE
+// approximation. `show_cel2`'s `x_table` (front walls) and `show_cel`'s
+// `z_table` (receding side walls) both key off `viewport_geometry[j][0][d]`
+// evaluated *directly at the target depth d* — unlike floor/ceiling's
+// f_table/c_table, which always reproject from the undecayed depth-0 fan
+// by a y-ratio. Concretely: `create_tables`' x_table loop computes
+// `xpos = MIDDLE_X - viewport_geometry[x][0][y+1].x` and (for the other
+// side of the same cell) `max_x = MIDDLE_X - viewport_geometry[x-1][0]
+// [y+1].x` — i.e. a lateral cell's screen-space left/right edges are the
+// depth-d fan values themselves, never reprojected from another depth.
+// (x_table/z_table always reference edge 0, the floor-side fan — verified
+// in both loops' source.) Since a lateral cell's *width* differs at every
+// depth anyway (the corridor narrows), a single evaluation at depth `d`
+// gives one edge of a wall quad; the other edge comes from evaluating
+// again at `d+1`(same as floor/ceiling's near/far pairing) — front walls
+// use one depth (`d+1`, the far boundary of the current cell, matching
+// existing convention), receding side walls use both `d` and `d+1` for
+// their near/far trapezoid corners, same shape as floorCeilBand's but at
+// direct (not reprojected) x-values.
+export interface WallBounds {
+  xl: number;
+  xr: number;
+  yTop: number;
+  yBottom: number;
+}
+
+export function wallCellBounds(geometry: ViewportGeometry, depth: number, lateral: number): WallBounds {
+  const edge: Edge = 0;
+  let xl: number, xr: number;
+  if (lateral === 0) {
+    const v = geometry[0]![edge]![depth]!.x;
+    xl = -v;
+    xr = v;
+  } else if (lateral < 0) {
+    const k = -lateral;
+    xl = -geometry[k]![edge]![depth]!.x;
+    xr = -geometry[k - 1]![edge]![depth]!.x;
+  } else {
+    const k = lateral;
+    xl = geometry[k - 1]![edge]![depth]!.x;
+    xr = geometry[k]![edge]![depth]!.x;
+  }
+  return {
+    xl: xl + MIDDLE_X,
+    xr: xr + MIDDLE_X,
+    yTop: geometry[0]![1]![depth]!.y + MIDDLE_Y,
+    yBottom: geometry[0]![0]![depth]!.y + MIDDLE_Y,
+  };
+}
+
+// engine1.c: `#define CTVR 128` — the fractional unit map_pos's posx/posy/
+// posz args are expressed in (0..CTVR spans one cell).
+const CTVR = 128;
+
+export interface ItemPosition {
+  x: number;
+  y: number;
+  // `last_scale` in the source: a pixel-height-of-wall-at-this-position
+  // value, used directly as a sprite zoom numerator over a 320 reference
+  // width (see dungeon-view.ts's drawFloorItem).
+  scale: number;
+}
+
+// C's `/` truncates toward zero for ints — Math.trunc matches that (unlike
+// Math.floor, which rounds differently for negative operands); every
+// division in map_pos is real, load-bearing integer truncation, not a
+// convenience.
+function idiv(a: number, b: number): number {
+  return Math.trunc(a / b);
+}
+
+// engine1.c's map_pos(): places an arbitrary sub-cell point — a fraction
+// (posx,posy,posz, each out of CTVR=128) of the cell at (lateral,depth) —
+// into screen space, by bilinearly interpolating the *same* viewport_
+// geometry fan wallCellBounds/floorCeilBand key off. Floor/ceiling and
+// walls each pick a fixed corner of that geometry; map_pos additionally
+// blends *within* a cell in both x (posx) and depth (posy), which is how
+// the real engine places item/sprite floor anchors anywhere on a tile's
+// floor instead of only at its corners. `posz` lifts the point above the
+// floor by a fraction of the local wall height (e.g. tabletop items) — the
+// only caller ported so far (draw_item, for ordinary floor items) always
+// passes 0, but the parameter is kept to stay a faithful 1:1 port.
+export function mapPos(geometry: ViewportGeometry, lateral: number, depth: number, posx: number, posy: number, posz: number): ItemPosition {
+  let negate = false;
+  if (lateral < 0) {
+    negate = true;
+    posx = CTVR - posx;
+    lateral = -lateral;
+  }
+
+  const floorY = (d: number) => geometry[0]![0]![d]!.y;
+  const ceilY = (d: number) => geometry[0]![1]![d]!.y;
+  const p1 = floorY(depth) - ceilY(depth);
+  const p2 = floorY(depth + 1) - ceilY(depth + 1);
+  const scale = idiv(posy * (p2 - p1), CTVR) + p1;
+  const y = floorY(depth) - idiv(posy * (floorY(depth) - floorY(depth + 1)), CTVR) - idiv(scale * posz, CTVR);
+
+  const edgeX = (k: number, d: number) => geometry[k]![0]![d]!.x;
+  const xr = edgeX(lateral, depth) - idiv(posy * (edgeX(lateral, depth) - edgeX(lateral, depth + 1)), CTVR);
+  const xl = lateral
+    ? edgeX(lateral - 1, depth) - idiv(posy * (edgeX(lateral - 1, depth) - edgeX(lateral - 1, depth + 1)), CTVR)
+    : -xr;
+  let x = xl + idiv((xr - xl) * posx, CTVR);
+  if (negate) x = -x;
+
+  return { x: x + MIDDLE_X, y: y + MIDDLE_Y, scale };
+}
