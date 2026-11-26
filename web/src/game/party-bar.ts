@@ -2,7 +2,6 @@ import { drawAlignedText, fontColors, rgb555, type BitmapFont } from '../gfx/bit
 import { imageDataToCanvas } from './portraits';
 
 export const PARTY_BAR_Y = 378;
-const FIRST_SLOT_X = 54;
 const FACE = { x: 3, y: 12, width: 54, height: 75 };
 const SEL_COLOR = rgb555(31, 31, 31);
 const BARS = { top: 13, height: 72 };
@@ -13,6 +12,7 @@ export interface PartyBarAssets {
   okno?: ImageData | undefined;
   faces?: ReadonlyMap<number, ImageData> | undefined;
   nameFont?: BitmapFont | undefined;
+  death?: ImageData | undefined;
 }
 
 export interface PartyBarMember {
@@ -20,6 +20,19 @@ export interface PartyBarMember {
   portraitIndex: number;
   group: number;
   fill?: { lives: number; stamina: number; mana: number };
+  faceFrame?: number;
+  dead?: boolean;
+}
+
+export const PARTY_SLOT = { firstX: 54, y: 378 } as const;
+
+export function faceFrameForLives(lives: number, maxLives: number): number {
+  if (lives >= maxLives || maxLives <= 0) return 0;
+  return 3 - Math.trunc(((lives - 1) * 4) / maxLives);
+}
+
+export function partySlotRect(okno: ImageData, slot: number): { x: number; y: number; width: number; height: number } {
+  return { x: PARTY_SLOT.firstX + okno.width * slot, y: PARTY_SLOT.y, width: okno.width, height: okno.height };
 }
 
 export function drawPartyBar(ctx: CanvasRenderingContext2D, assets: PartyBarAssets, members: readonly PartyBarMember[]): void {
@@ -28,11 +41,14 @@ export function drawPartyBar(ctx: CanvasRenderingContext2D, assets: PartyBarAsse
   if (!okno) return;
   const oknoCanvas = imageDataToCanvas(okno);
   members.forEach((member, slot) => {
-    const x = FIRST_SLOT_X + okno.width * slot;
+    const x = PARTY_SLOT.firstX + okno.width * slot;
     ctx.drawImage(oknoCanvas, x, PARTY_BAR_Y);
     const face = assets.faces?.get(member.portraitIndex);
-    if (face) {
-      ctx.drawImage(imageDataToCanvas(face), 0, 0, FACE.width, FACE.height, x + FACE.x, PARTY_BAR_Y + FACE.y, FACE.width, FACE.height);
+    if (member.dead) {
+      if (assets.death) ctx.drawImage(imageDataToCanvas(assets.death), x + FACE.x, PARTY_BAR_Y + FACE.y);
+    } else if (face) {
+      const top = (member.faceFrame ?? 0) * FACE.height;
+      ctx.drawImage(imageDataToCanvas(face), 0, top, FACE.width, FACE.height, x + FACE.x, PARTY_BAR_Y + FACE.y, FACE.width, FACE.height);
     }
     if (member.fill) {
       ctx.fillStyle = '#000';
