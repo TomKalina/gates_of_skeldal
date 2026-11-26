@@ -1,7 +1,8 @@
 import { createScreenCanvas } from './platform/canvas-context';
 import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
-import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
+import { runCharacterCreation, type CharacterCreationAssets, type ChargenFonts } from './game/character-creation';
+import { parseBitmapFont } from './gfx/bitmap-font';
 import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
 import type { InventoryAssets } from './game/inventory-view';
 import type { Direction } from './game/dungeon';
@@ -106,6 +107,20 @@ function loadMenuAssets(archive: DDLArchive): MainMenuAssets {
   return assets;
 }
 
+function loadChargenFonts(archive: DDLArchive): ChargenFonts | undefined {
+  const load = (name: string) => {
+    const raw = archive.extract(name);
+    return raw ? parseBitmapFont(raw) : undefined;
+  };
+  const tiny = load('TINY.FON');
+  const font6 = load('FONT6X9.FON');
+  const font7 = load('SADA7.FON');
+  const litt = load('FONT4X8.FON');
+  const symbols = load('IKONES.FON');
+  if (!tiny || !font6 || !font7 || !litt || !symbols) return undefined;
+  return { tiny, font6, font7, litt, symbols };
+}
+
 function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAssets {
   const assets: CharacterCreationAssets = {};
   const topbar = decodeIfPresent(archive, 'TOPBAR_P.PCX');
@@ -124,6 +139,24 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   if (svitek) assets.svitek = svitek;
   const hotspotMask = loadHotspotMaskIfPresent(archive, 'CHARGENM.PCX');
   if (hotspotMask) assets.hotspotMask = hotspotMask;
+  const pearlMask = loadHotspotMaskIfPresent(archive, 'PERLA.PCX');
+  if (pearlMask) assets.pearlMask = pearlMask;
+  const desk = decodeIfPresent(archive, 'DESK.PCX');
+  if (desk) assets.desk = desk;
+  const okno = decodeIfPresent(archive, 'OKNO.PCX');
+  if (okno) assets.okno = okno;
+  const buttonPanel = decodeIfPresent(archive, 'CHARGEN.PCX', 0);
+  if (buttonPanel) assets.buttonPanel = buttonPanel;
+  const buttonPanelDisabled = decodeIfPresent(archive, 'CHARGENB.PCX', 0);
+  if (buttonPanelDisabled) assets.buttonPanelDisabled = buttonPanelDisabled;
+  const faces = new Map<number, ImageData>();
+  for (let i = 0; i < 8; i++) {
+    const face = decodeIfPresent(archive, `XICHT${i.toString(16).padStart(2, '0').toUpperCase()}.PCX`, 0);
+    if (face) faces.set(i, face);
+  }
+  if (faces.size > 0) assets.faces = faces;
+  const fonts = loadChargenFonts(archive);
+  if (fonts) assets.fonts = fonts;
 
   const bodySprites = new Map<number, ImageData>();
   for (let i = 0; i < 8; i++) {
