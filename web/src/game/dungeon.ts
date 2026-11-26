@@ -163,6 +163,10 @@ export function stepBackward(state: DungeonState): DungeonState {
   return stepThrough(state, behind(state.direction));
 }
 
+export function stepToward(state: DungeonState, dir: Direction): DungeonState {
+  return stepThrough(state, dir);
+}
+
 export interface ViewCell {
   depth: number;
   // 0 = straight ahead, negative = left of center, positive = right —

@@ -1,9 +1,11 @@
-import { behind, canStep, computeVisibleGrid, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, runConfiguredAction, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import { behind, canStep, computeVisibleGrid, stepToward, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, runConfiguredAction, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
 import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
 import { readSave, writeSave } from './save';
 import { depositItems, type Character } from './party';
-import { faceThumbnail } from './portraits';
+import { faceThumbnail, imageDataToCanvas } from './portraits';
+import { drawPartyBar, faceFrameForLives, partySlotRect, type PartyBarMember } from './party-bar';
+import { drawAlignedText, fontColors, rgb555, type BitmapFont } from '../gfx/bitmap-font';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
 import { calcPoints, floorCeilBand, mapPos, wallCellBounds, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
@@ -46,15 +48,15 @@ export interface DungeonWorld {
 // asset is missing, same convention as every other screen in this port.
 export interface DungeonChromeAssets {
   topbar?: ImageData;
-  // SIPKY.PCX: the base D-pad art, all 4 arrows shown. SIPKY_S/J/Z/V.PCX are
-  // the same image with one arrow highlighted, keyed by which screen
-  // position they highlight (up/down/left/right) — see the note by
-  // DPAD_QUADRANTS for why the Czech compass-letter filenames map this way.
   dpad?: ImageData;
-  dpadHoverUp?: ImageData;
-  dpadHoverDown?: ImageData;
-  dpadHoverLeft?: ImageData;
-  dpadHoverRight?: ImageData;
+  arrowStrips?: Partial<Record<ArrowButton, ImageData>>;
+  compass?: ImageData;
+  desk?: ImageData;
+  okno?: ImageData;
+  faces?: ReadonlyMap<number, ImageData>;
+  death?: ImageData;
+  moneyFont?: BitmapFont;
+  nameFont?: BitmapFont;
   // POSTAVY.PCX — reused here purely for its baked-in face crops (see
   // portraits.ts), same as the chargen roster box.
   deskPanel?: ImageData;
@@ -141,22 +143,23 @@ const TOPBAR_BUTTONS = {
 } as const;
 const GOLD_TEXT_X = 540;
 
-// SIPKY.PCX (142x102): a diamond D-pad — up/down/left/right triangular
-// arrows around a center skull medallion. Quadrant boxes are generous
-// hand-measured rects (not per-pixel masks), same convention as every other
-// hotspot in this port. Screen-position keys, not compass directions —
-// SIPKY_S/J/Z/V.PCX's names are Czech compass letters (Sever/Jih/Západ/
-// Východ = N/S/W/E) but the artwork always draws north-up, so "S" highlights
-// the TOP arrow, "J" the bottom, "Z" the left, "V" the right; wired to
-// forward/back/turn-left/turn-right the same as the arrow keys.
 const DPAD_SIZE = { width: 142, height: 102 };
-const DPAD_QUADRANTS = {
-  up: { x: 40, y: 0, width: 55, height: 35 },
-  down: { x: 40, y: 65, width: 55, height: 37 },
-  left: { x: 0, y: 28, width: 42, height: 46 },
-  right: { x: 100, y: 28, width: 42, height: 46 },
-} as const;
-type DpadDirection = keyof typeof DPAD_QUADRANTS;
+const ARROWS_ORIGIN = { x: 498, y: 378 };
+const ARROW_STRIP_STEP = 110;
+const ARROW_ANIM_PHASES = 6;
+const CHROME_TICK_MS = 50;
+const COMPASS = { x: 476, y: 0, frameHeight: 16, frames: 40, framesPerTurn: 10 };
+const MONEY = { right: 460, bottom: 13, color: rgb555(28, 28, 21) };
+export type ArrowButton = 'forward' | 'back' | 'strafeLeft' | 'strafeRight' | 'turnLeft' | 'turnRight';
+const ARROW_BUTTONS: readonly [ArrowButton, Rect][] = [
+  ['forward', { x: 561, y: 378, width: 38, height: 30 }],
+  ['turnLeft', { x: 530, y: 387, width: 31, height: 32 }],
+  ['strafeLeft', { x: 529, y: 419, width: 27, height: 35 }],
+  ['back', { x: 560, y: 446, width: 39, height: 29 }],
+  ['turnRight', { x: 599, y: 387, width: 30, height: 32 }],
+  ['strafeRight', { x: 605, y: 420, width: 28, height: 35 }],
+];
+const RELATIVE_STEP_ARROWS: readonly ArrowButton[] = ['forward', 'strafeRight', 'back', 'strafeLeft'];
 
 // game/clk_map.c's pick_item_ click regions — id0 (left) and id1 (right)
 // halves of this rect, together spanning the near-sector floor. Absolute
@@ -216,7 +219,8 @@ export function runDungeonView(
   let textures = initialTextures;
   let levelTexts = initialLevelTexts;
   let party = initialParty;
-  let hoverDpad: DpadDirection | null = null;
+  let arrowAnim: { button: ArrowButton; phase: number } | null = null;
+  let compassPhase = 0;
   let statusText = '';
   // game/inv.c's inventory/equipment screen (Phase D2a: chrome + open/close
   // only, see inventory-view.ts's own header comment for what's deferred).
@@ -509,10 +513,87 @@ export function runDungeonView(
       ctx.fillStyle = '#111';
       ctx.fillRect(0, 0, canvas.width, TOPBAR_HEIGHT);
     }
-    ctx.font = '11px monospace';
-    ctx.fillStyle = '#d9c88a';
-    ctx.textBaseline = 'top';
-    ctx.fillText(String(encounter?.gold ?? 0), GOLD_TEXT_X, 2);
+    if (chrome.compass) {
+      ctx.drawImage(imageDataToCanvas(chrome.compass), 0, compassPhase * COMPASS.frameHeight, chrome.compass.width, COMPASS.frameHeight, COMPASS.x, COMPASS.y, chrome.compass.width, COMPASS.frameHeight);
+    }
+    const gold = String(encounter?.gold ?? 0);
+    if (chrome.moneyFont) {
+      drawAlignedText(ctx, chrome.moneyFont, gold, MONEY.right, MONEY.bottom, 2, 2, fontColors(MONEY.color));
+    } else {
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#d9c88a';
+      ctx.textBaseline = 'top';
+      ctx.fillText(gold, GOLD_TEXT_X, 2);
+    }
+  }
+
+  function compassTarget(): number {
+    return ((3 - state.direction) * COMPASS.framesPerTurn + COMPASS.frames) % COMPASS.frames;
+  }
+
+  function stepCompass(): boolean {
+    let delta = compassPhase - compassTarget();
+    if (delta < -COMPASS.frames / 2) delta += COMPASS.frames;
+    if (delta >= COMPASS.frames / 2) delta -= COMPASS.frames;
+    const speed = Math.sign(delta);
+    if (speed === 0) return false;
+    compassPhase = (compassPhase - speed + COMPASS.frames) % COMPASS.frames;
+    return true;
+  }
+
+  function stepArrows(): boolean {
+    if (!arrowAnim) return false;
+    arrowAnim.phase--;
+    if (arrowAnim.phase <= 0) arrowAnim = null;
+    return true;
+  }
+
+  function startArrowAnim(button: ArrowButton): void {
+    arrowAnim = { button, phase: ARROW_ANIM_PHASES };
+  }
+
+  function drawArrows(): void {
+    const strip = arrowAnim ? chrome.arrowStrips?.[arrowAnim.button] : undefined;
+    if (arrowAnim && strip) {
+      const frame = arrowAnim.phase > 4 ? 8 - arrowAnim.phase : arrowAnim.phase;
+      const top = (frame - 2) * ARROW_STRIP_STEP;
+      if (top >= 0) {
+        ctx.drawImage(imageDataToCanvas(strip), 0, top, DPAD_SIZE.width, DPAD_SIZE.height, ARROWS_ORIGIN.x, ARROWS_ORIGIN.y, DPAD_SIZE.width, DPAD_SIZE.height);
+        return;
+      }
+    }
+    if (chrome.dpad && (arrowAnim || !chrome.desk)) ctx.drawImage(toDrawable(chrome.dpad), ARROWS_ORIGIN.x, ARROWS_ORIGIN.y);
+    else if (!chrome.desk) {
+      ctx.strokeStyle = '#555';
+      ctx.strokeRect(ARROWS_ORIGIN.x + 0.5, ARROWS_ORIGIN.y + 0.5, DPAD_SIZE.width, DPAD_SIZE.height);
+    }
+  }
+
+  function partyBarMembers(): PartyBarMember[] {
+    return party.map((member, i) => {
+      const maxHp = encounter?.maxHp[i] ?? member.stats.maxHp;
+      const hp = encounter?.hp[i] ?? maxHp;
+      return {
+        name: member.name,
+        portraitIndex: member.portraitIndex,
+        group: 1,
+        dead: hp <= 0,
+        faceFrame: faceFrameForLives(hp, maxHp),
+        fill: { lives: maxHp > 0 ? Math.max(0, hp) / maxHp : 0, stamina: 1, mana: member.stats.maxMana > 0 ? 1 : 0 },
+      };
+    });
+  }
+
+  function partySlotAt(x: number, y: number): number | null {
+    if (chrome.desk && chrome.okno) {
+      for (let i = 0; i < party.length; i++) if (rectContains(partySlotRect(chrome.okno, i), x, y)) return i;
+      return null;
+    }
+    const positions = partyBoxPositions();
+    for (let i = 0; i < party.length; i++) {
+      if (rectContains({ x: positions[i]!, y: BOTTOM_BAR.y, width: PARTY_BOX_WIDTH, height: PARTY_BOX_HEIGHT }, x, y)) return i;
+    }
+    return null;
   }
 
   function drawPartyBox(member: Character, index: number, x: number): void {
@@ -566,22 +647,10 @@ export function runDungeonView(
     ctx.textAlign = 'left';
   }
 
-  function dpadImage(): ImageData | undefined {
-    if (hoverDpad === 'up') return chrome.dpadHoverUp ?? chrome.dpad;
-    if (hoverDpad === 'down') return chrome.dpadHoverDown ?? chrome.dpad;
-    if (hoverDpad === 'left') return chrome.dpadHoverLeft ?? chrome.dpad;
-    if (hoverDpad === 'right') return chrome.dpadHoverRight ?? chrome.dpad;
-    return chrome.dpad;
-  }
-
-  function dpadOrigin(): { x: number; y: number } {
-    return { x: BOTTOM_BAR.x + BOTTOM_BAR.width - DPAD_SIZE.width - 12, y: BOTTOM_BAR.y };
-  }
-
   // Shared between drawBottomBar and onMouseDown's portrait-deposit hit-test
   // so the clickable rects always match what's actually drawn.
   function partyBoxPositions(): number[] {
-    const dpadOrig = dpadOrigin();
+    const dpadOrig = ARROWS_ORIGIN;
     // Party boxes shrink to fit if they'd otherwise run into the D-pad —
     // no evidence for how the real game lays out a full 6-member party here,
     // so this is a reasonable fit-to-space choice, not a measured fact.
@@ -598,19 +667,15 @@ export function runDungeonView(
   }
 
   function drawBottomBar(): void {
-    ctx.fillStyle = '#111';
-    ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
-
-    const positions = partyBoxPositions();
-    party.forEach((member, i) => drawPartyBox(member, i, positions[i]!));
-
-    const dpadOrig = dpadOrigin();
-    const image = dpadImage();
-    if (image) ctx.drawImage(toDrawable(image), dpadOrig.x, dpadOrig.y);
-    else {
-      ctx.strokeStyle = '#555';
-      ctx.strokeRect(dpadOrig.x + 0.5, dpadOrig.y + 0.5, DPAD_SIZE.width, DPAD_SIZE.height);
+    if (chrome.desk && chrome.okno) {
+      drawPartyBar(ctx, { desk: chrome.desk, okno: chrome.okno, faces: chrome.faces, nameFont: chrome.nameFont, death: chrome.death }, partyBarMembers());
+    } else {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
+      const positions = partyBoxPositions();
+      party.forEach((member, i) => drawPartyBox(member, i, positions[i]!));
     }
+    drawArrows();
 
     if (statusText) {
       ctx.fillStyle = '#ff8080';
@@ -660,6 +725,9 @@ export function runDungeonView(
 
     drawTopBar();
     drawBottomBar();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, TOPBAR_HEIGHT, canvas.width, 1);
+    ctx.fillRect(0, BOTTOM_BAR.y - 1, canvas.width, 1);
     drawHeldItemCursor();
     drawEnding();
   }
@@ -849,25 +917,20 @@ export function runDungeonView(
     // their portrait box — real inv.c's start_invetory else-branch (the
     // if-branch, switching the open inventory screen to the clicked member,
     // isn't wired: inventoryOpen always shows party[0], see its own comment).
-    {
-      const positions = partyBoxPositions();
-      for (let i = 0; i < party.length; i++) {
-        const boxRect = { x: positions[i]!, y: BOTTOM_BAR.y, width: PARTY_BOX_WIDTH, height: PARTY_BOX_HEIGHT };
-        if (rectContains(boxRect, x, y)) {
-          if (!heldItem) {
-            attackWith(i);
-            return;
-          }
-          if (consumeHeld(i)) return;
-          const member = party[i]!;
-          const { character, leftover } = depositItems(member, heldItem);
-          party = party.map((m, idx) => (idx === i ? character : m));
-          heldItem = leftover.length > 0 ? [...leftover] : null;
-          statusText = leftover.length > 0 ? 'Batoh je plný.' : 'Vloženo do batohu.';
-          draw();
-          return;
-        }
+    const slot = partySlotAt(x, y);
+    if (slot !== null) {
+      if (!heldItem) {
+        attackWith(slot);
+        return;
       }
+      if (consumeHeld(slot)) return;
+      const member = party[slot]!;
+      const { character, leftover } = depositItems(member, heldItem);
+      party = party.map((m, idx) => (idx === slot ? character : m));
+      heldItem = leftover.length > 0 ? [...leftover] : null;
+      statusText = leftover.length > 0 ? 'Batoh je plný.' : 'Vloženo do batohu.';
+      draw();
+      return;
     }
 
     // realgame.c's clk_touch: no matter *where* within its resolved rect
@@ -898,23 +961,28 @@ export function runDungeonView(
       return;
     }
 
-    const dpadOrig = dpadOrigin();
-    const localX = x - dpadOrig.x;
-    const localY = y - dpadOrig.y;
-    for (const [dir, quad] of Object.entries(DPAD_QUADRANTS) as [DpadDirection, Rect][]) {
-      if (rectContains(quad, localX, localY)) {
-        applyDpadDirection(dir);
+    for (const [button, area] of ARROW_BUTTONS) {
+      if (rectContains(area, x, y)) {
+        applyArrow(button);
         return;
       }
     }
   }
 
-  function applyDpadDirection(dir: DpadDirection): void {
+  function applyArrow(button: ArrowButton): void {
+    if (button === 'turnLeft' || button === 'turnRight') {
+      turn(button);
+      return;
+    }
+    const relative = RELATIVE_STEP_ARROWS.indexOf(button);
+    const dir = ((state.direction + relative) % 4) as DungeonState['direction'];
+    attemptStep(dir, (s) => stepToward(s, dir));
+  }
+
+  function turn(button: 'turnLeft' | 'turnRight'): void {
+    state = { ...state, direction: button === 'turnLeft' ? turnLeft(state.direction) : turnRight(state.direction) };
+    startArrowAnim(button);
     statusText = '';
-    if (dir === 'up') state = stepForward(state);
-    else if (dir === 'down') state = stepBackward(state);
-    else if (dir === 'left') state = { ...state, direction: turnLeft(state.direction) };
-    else state = { ...state, direction: turnRight(state.direction) };
     draw();
   }
 
@@ -929,21 +997,6 @@ export function runDungeonView(
     if (heldItem) {
       cursorX = x;
       cursorY = y;
-      draw();
-    }
-
-    const dpadOrig = dpadOrigin();
-    const localX = x - dpadOrig.x;
-    const localY = y - dpadOrig.y;
-    let next: DpadDirection | null = null;
-    for (const [dir, quad] of Object.entries(DPAD_QUADRANTS) as [DpadDirection, Rect][]) {
-      if (rectContains(quad, localX, localY)) {
-        next = dir;
-        break;
-      }
-    }
-    if (next !== hoverDpad) {
-      hoverDpad = next;
       draw();
     }
   }
@@ -979,6 +1032,7 @@ export function runDungeonView(
     const blockedByMob = passable && encounter !== undefined && mobsInSector(encounter, state.map.sectors[state.sector]?.stepNext[dir] ?? 0).length > 0;
     if (blockedByMob) return;
     const passText = passageTextTrigger(state.map, state.sector, dir);
+    startArrowAnim(RELATIVE_STEP_ARROWS[(dir - state.direction + 4) % 4]!);
     state = step(state);
     statusText = passText !== undefined ? (levelTexts.get(passText) ?? '') : '';
     runSideMacros(side, passable ? MC.PASSSUC : MC.PASSFAIL);
@@ -1004,11 +1058,11 @@ export function runDungeonView(
         attemptStep(behind(state.direction), stepBackward);
         return;
       case 'ArrowLeft':
-        state = { ...state, direction: turnLeft(state.direction) };
-        break;
+        turn('turnLeft');
+        return;
       case 'ArrowRight':
-        state = { ...state, direction: turnRight(state.direction) };
-        break;
+        turn('turnRight');
+        return;
       case 'KeyI':
         inventoryOpen = true;
         draw();
@@ -1037,8 +1091,15 @@ export function runDungeonView(
   const TICK_MS = 100;
   let animationFrameId = 0;
   let lastTickAt = 0;
+  let lastChromeTickAt = 0;
   function tickLoop(now: number): void {
     animationFrameId = requestAnimationFrame(tickLoop);
+    if (now - lastChromeTickAt >= CHROME_TICK_MS && !inventoryOpen) {
+      lastChromeTickAt = now;
+      const compassMoved = stepCompass();
+      const arrowsMoved = stepArrows();
+      if (compassMoved || arrowsMoved) draw();
+    }
     if (now - lastTickAt < TICK_MS) return;
     lastTickAt = now;
     pumpTick();

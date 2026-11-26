@@ -3,7 +3,7 @@ import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
 import { runCharacterCreation, type CharacterCreationAssets, type ChargenFonts } from './game/character-creation';
 import { parseBitmapFont } from './gfx/bitmap-font';
-import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
+import { runDungeonView, type ArrowButton, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
 import type { InventoryAssets } from './game/inventory-view';
 import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
@@ -149,11 +149,7 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   if (buttonPanel) assets.buttonPanel = buttonPanel;
   const buttonPanelDisabled = decodeIfPresent(archive, 'CHARGENB.PCX', 0);
   if (buttonPanelDisabled) assets.buttonPanelDisabled = buttonPanelDisabled;
-  const faces = new Map<number, ImageData>();
-  for (let i = 0; i < 8; i++) {
-    const face = decodeIfPresent(archive, `XICHT${i.toString(16).padStart(2, '0').toUpperCase()}.PCX`, 0);
-    if (face) faces.set(i, face);
-  }
+  const faces = loadFaces(archive);
   if (faces.size > 0) assets.faces = faces;
   const fonts = loadChargenFonts(archive);
   if (fonts) assets.fonts = fonts;
@@ -362,17 +358,22 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap, itemAppearanc
   };
 }
 
-// SIPKY_S/J/Z/V.PCX (142x330) each stack 3 near-identical frames of the
-// D-pad with one arrow highlighted — only the first frame is used, there's
-// no meaningful animation to port here.
-function firstFrame(image: ImageData, frameHeight: number): ImageData {
-  const canvas = document.createElement('canvas');
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const c = canvas.getContext('2d');
-  if (!c) throw new Error('2D canvas context unavailable');
-  c.putImageData(image, 0, 0);
-  return c.getImageData(0, 0, image.width, frameHeight);
+const ARROW_STRIP_FILES: readonly [ArrowButton, string][] = [
+  ['forward', 'SIPKY_S.PCX'],
+  ['back', 'SIPKY_J.PCX'],
+  ['strafeLeft', 'SIPKY_Z.PCX'],
+  ['strafeRight', 'SIPKY_V.PCX'],
+  ['turnLeft', 'SIPKY_SZ.PCX'],
+  ['turnRight', 'SIPKY_SV.PCX'],
+];
+
+function loadFaces(archive: DDLArchive): Map<number, ImageData> {
+  const faces = new Map<number, ImageData>();
+  for (let i = 0; i < 8; i++) {
+    const face = decodeIfPresent(archive, `XICHT${i.toString(16).padStart(2, '0').toUpperCase()}.PCX`, 0);
+    if (face) faces.set(i, face);
+  }
+  return faces;
 }
 
 function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | undefined): DungeonChromeAssets {
@@ -381,18 +382,26 @@ function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | und
   if (topbar) assets.topbar = topbar;
   const dpad = decodeIfPresent(archive, 'SIPKY.PCX');
   if (dpad) assets.dpad = dpad;
-  // Filenames are Czech compass letters (Sever/Jih/Západ/Východ = N/S/W/E),
-  // but the art always draws north-up, so they map to screen position:
-  // S(north)=top=forward, J(south)=bottom=back, Z(west)=left=turn-left,
-  // V(east)=right=turn-right — see dungeon-view.ts's DPAD_QUADRANTS.
-  const hoverUp = decodeIfPresent(archive, 'SIPKY_S.PCX');
-  if (hoverUp) assets.dpadHoverUp = firstFrame(hoverUp, dpad?.height ?? 102);
-  const hoverDown = decodeIfPresent(archive, 'SIPKY_J.PCX');
-  if (hoverDown) assets.dpadHoverDown = firstFrame(hoverDown, dpad?.height ?? 102);
-  const hoverLeft = decodeIfPresent(archive, 'SIPKY_Z.PCX');
-  if (hoverLeft) assets.dpadHoverLeft = firstFrame(hoverLeft, dpad?.height ?? 102);
-  const hoverRight = decodeIfPresent(archive, 'SIPKY_V.PCX');
-  if (hoverRight) assets.dpadHoverRight = firstFrame(hoverRight, dpad?.height ?? 102);
+  const arrowStrips: Partial<Record<ArrowButton, ImageData>> = {};
+  for (const [button, name] of ARROW_STRIP_FILES) {
+    const strip = decodeIfPresent(archive, name, 0);
+    if (strip) arrowStrips[button] = strip;
+  }
+  assets.arrowStrips = arrowStrips;
+  const compass = decodeIfPresent(archive, 'KOMPAS.PCX');
+  if (compass) assets.compass = compass;
+  const desk = decodeIfPresent(archive, 'DESK.PCX');
+  if (desk) assets.desk = desk;
+  const okno = decodeIfPresent(archive, 'OKNO.PCX');
+  if (okno) assets.okno = okno;
+  const death = decodeIfPresent(archive, 'DEATH.PCX', 0);
+  if (death) assets.death = death;
+  const faces = loadFaces(archive);
+  if (faces.size > 0) assets.faces = faces;
+  const moneyFont = archive.extract('SADA7.FON');
+  if (moneyFont) assets.moneyFont = parseBitmapFont(moneyFont);
+  const nameFont = archive.extract('FONT4X8.FON');
+  if (nameFont) assets.nameFont = parseBitmapFont(nameFont);
   if (deskPanel) assets.deskPanel = deskPanel;
   return assets;
 }
