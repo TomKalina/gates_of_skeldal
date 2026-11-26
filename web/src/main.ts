@@ -101,6 +101,8 @@ function loadMenuAssets(archive: DDLArchive): MainMenuAssets {
   if (logoImage) assets.logo = { image: logoImage, y: 56 };
   const hotspotMask = loadHotspotMaskIfPresent(archive, 'MENUVOL5.PCX');
   if (hotspotMask) assets.hotspotMask = hotspotMask;
+  const buttonFrames = [0, 1, 2, 3, 4].map((i) => decodeIfPresent(archive, `MENUVOL${i}.PCX`));
+  if (buttonFrames.every((f) => f)) assets.buttonFrames = buttonFrames as ImageData[];
   return assets;
 }
 

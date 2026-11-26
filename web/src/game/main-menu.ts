@@ -1,4 +1,4 @@
-import { MENU_ITEMS, MENU_RECT, hitTestMenu, hitTestMenuBands, navigateMenu, type MenuChoice } from '../gui/menu-nav';
+import { BUTTON_FRAME_MS, MENU_ITEMS, MENU_RECT, hitTestMenu, hitTestMenuBands, navigateMenu, stepButtonFrames, type MenuChoice } from '../gui/menu-nav';
 import type { HotspotMask } from '../gui/hotspot-mask';
 import { clientToCanvasPoint } from '../platform/canvas-transform';
 
@@ -9,6 +9,7 @@ export interface MainMenuAssets {
   // real per-pixel button hit-test. Falls back to hitTestMenuBands' equal-
   // band approximation if this fails to load.
   hotspotMask?: HotspotMask;
+  buttonFrames?: readonly ImageData[];
 }
 
 export interface MainMenuHandle {
@@ -25,11 +26,24 @@ export interface MainMenuHandle {
 // equal 5-way band split only if that asset fails to load.
 export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAssets = {}): MainMenuHandle {
   const canvas = ctx.canvas;
-  let selected: MenuChoice = 0;
+  const framePos = [0, 0, 0, 0, 0];
+  const selecting = [false, false, false, false, false];
+  let picked: MenuChoice | null = null;
   let resolveChoice!: (choice: MenuChoice) => void;
   const choice = new Promise<MenuChoice>((resolve) => {
     resolveChoice = resolve;
   });
+
+  function selectedIndex(): MenuChoice | null {
+    const i = selecting.indexOf(true);
+    return i === -1 ? null : (i as MenuChoice);
+  }
+
+  function select(index: MenuChoice | null): void {
+    selecting.fill(false);
+    if (index !== null) selecting[index] = true;
+    if (!assets.background) draw();
+  }
 
   function drawBackground(): void {
     if (assets.background) {
@@ -45,47 +59,78 @@ export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAsset
     }
   }
 
+  function drawButtons(): void {
+    const frames = assets.buttonFrames;
+    const mask = assets.hotspotMask;
+    if (!frames || !mask || frames.length < 5) return;
+    const width = Math.min(mask.width, frames[0]!.width);
+    const height = Math.min(mask.height, frames[0]!.height);
+    const out = ctx.getImageData(MENU_RECT.x, MENU_RECT.y, width, height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const button = mask.indices[y * mask.width + x]!;
+        if (button === 0 || button > 5) continue;
+        const frame = frames[framePos[button - 1]!]!;
+        const src = (y * frame.width + x) * 4;
+        const dst = (y * width + x) * 4;
+        out.data[dst] = frame.data[src]!;
+        out.data[dst + 1] = frame.data[src + 1]!;
+        out.data[dst + 2] = frame.data[src + 2]!;
+        out.data[dst + 3] = 255;
+      }
+    }
+    ctx.putImageData(out, MENU_RECT.x, MENU_RECT.y);
+  }
+
   function draw(): void {
     drawBackground();
-
+    if (assets.background) {
+      drawButtons();
+      return;
+    }
     const bandHeight = MENU_RECT.height / MENU_ITEMS.length;
-    if (!assets.background) {
-      ctx.font = '20px monospace';
-      ctx.textBaseline = 'middle';
-      MENU_ITEMS.forEach((label, i) => {
-        const y = MENU_RECT.y + i * bandHeight + bandHeight / 2;
-        ctx.fillStyle = i === selected ? '#ffe38c' : '#8899aa';
-        ctx.fillText(label, MENU_RECT.x, y);
-      });
-    } else {
-      // Real art already renders the labels; just outline the highlighted band.
-      const y = MENU_RECT.y + selected * bandHeight;
-      ctx.strokeStyle = '#ffe38c';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(MENU_RECT.x + 1, y + 1, MENU_RECT.width - 2, bandHeight - 2);
+    const current = selectedIndex();
+    ctx.font = '20px monospace';
+    ctx.textBaseline = 'middle';
+    MENU_ITEMS.forEach((label, i) => {
+      const y = MENU_RECT.y + i * bandHeight + bandHeight / 2;
+      ctx.fillStyle = i === current ? '#ffe38c' : '#8899aa';
+      ctx.fillText(label, MENU_RECT.x, y);
+    });
+  }
+
+  function tick(): void {
+    if (stepButtonFrames(framePos, selecting)) drawButtons();
+    if (picked !== null && framePos[picked] === 0) {
+      const done = picked;
+      dispose();
+      resolveChoice(done);
     }
   }
 
   function pick(index: MenuChoice): void {
-    selected = index;
-    draw();
-    dispose();
-    resolveChoice(index);
+    if (picked !== null) return;
+    detachInput();
+    picked = index;
+    selecting.fill(false);
+    if (!assets.background || !assets.buttonFrames) {
+      dispose();
+      resolveChoice(index);
+    }
   }
 
   function onKeydown(e: KeyboardEvent): void {
+    const current = selectedIndex();
     switch (e.code) {
       case 'ArrowUp':
-        selected = navigateMenu(selected, -1);
-        draw();
+        select(current === null ? 0 : navigateMenu(current, -1));
         break;
       case 'ArrowDown':
-        selected = navigateMenu(selected, 1);
-        draw();
+        select(current === null ? 0 : navigateMenu(current, 1));
         break;
       case 'Enter':
       case 'Space':
-        pick(selected);
+        if (current !== null) pick(current);
         break;
       case 'Escape':
         pick(4);
@@ -97,30 +142,39 @@ export function runMainMenu(ctx: CanvasRenderingContext2D, assets: MainMenuAsset
     return assets.hotspotMask ? hitTestMenu(assets.hotspotMask, x, y) : hitTestMenuBands(x, y);
   }
 
-  function onClick(e: MouseEvent): void {
-    const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
-    const hit = hitTest(x, y);
-    if (hit !== null) pick(hit);
+  function insideRegion(x: number, y: number): boolean {
+    return x >= MENU_RECT.x && x <= MENU_RECT.x + MENU_RECT.width && y >= MENU_RECT.y && y <= MENU_RECT.y + MENU_RECT.height;
   }
 
-  function onMove(e: MouseEvent): void {
+  function onMouseDown(e: MouseEvent): void {
+    if (e.button !== 0) return;
     const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
-    const hit = hitTest(x, y);
-    if (hit !== null && hit !== selected) {
-      selected = hit;
-      draw();
-    }
+    select(insideRegion(x, y) ? hitTest(x, y) : null);
+  }
+
+  function onMouseUp(e: MouseEvent): void {
+    if (e.button !== 0) return;
+    const { x, y } = clientToCanvasPoint(canvas, e.clientX, e.clientY);
+    const current = selectedIndex();
+    if (insideRegion(x, y) && current !== null) pick(current);
+  }
+
+  const timer = window.setInterval(tick, BUTTON_FRAME_MS);
+
+  function detachInput(): void {
+    window.removeEventListener('keydown', onKeydown);
+    canvas.removeEventListener('mousedown', onMouseDown);
+    canvas.removeEventListener('mouseup', onMouseUp);
   }
 
   function dispose(): void {
-    window.removeEventListener('keydown', onKeydown);
-    canvas.removeEventListener('click', onClick);
-    canvas.removeEventListener('mousemove', onMove);
+    detachInput();
+    window.clearInterval(timer);
   }
 
   window.addEventListener('keydown', onKeydown);
-  canvas.addEventListener('click', onClick);
-  canvas.addEventListener('mousemove', onMove);
+  canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('mouseup', onMouseUp);
   draw();
 
   return { choice, dispose };
