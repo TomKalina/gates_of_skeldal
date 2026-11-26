@@ -76,16 +76,16 @@ export function computeAttributeRanges(angleDeg: number, radius: number): Attrib
 export function pearlOffsetFromAngle(angleDeg: number, radius: number): { dx: number; dy: number } {
   const rad = (angleDeg * Math.PI) / 180;
   return {
-    dx: Math.round(Math.cos(rad) * radius),
-    dy: -Math.round(Math.sin(rad) * radius),
+    dx: Math.trunc(Math.cos(rad) * radius),
+    dy: -Math.trunc(Math.sin(rad) * radius),
   };
 }
 
 // vol_vlastnosti: pointer offset from the dial center -> angle/radius.
 export function angleAndRadiusFromOffset(dx: number, dy: number): { angleDeg: number; radius: number } {
   const flippedY = -dy;
-  let angleDeg = (Math.atan2(flippedY, dx) * 180) / Math.PI;
+  let angleDeg = Math.trunc((Math.atan2(flippedY, dx) * 180) / Math.PI);
   if (angleDeg < 0) angleDeg += 360;
-  const radius = Math.min(Math.sqrt(dx * dx + flippedY * flippedY), WHEEL_MAX_RADIUS);
+  const radius = Math.min(Math.trunc(Math.sqrt(dx * dx + flippedY * flippedY)), WHEEL_MAX_RADIUS);
   return { angleDeg, radius };
 }
