@@ -170,16 +170,6 @@ function faceThumbnail(assets: CharacterCreationAssets, portraitIndex: number): 
   return sharedFaceThumbnail(assets.deskPanel, portraitIndex);
 }
 
-// TS counterpart of chargen.c's enter_generator(): pick a portrait, drag the
-// "pearl" around the attribute wheel to pick a stat-range archetype, name the
-// character, allocate bonus points on a stat-review screen, and repeat until
-// the party (up to MAX_PARTY_SIZE) is ready. Rebuilt against reference
-// screenshots of the real game — see docs/port-graph.md for exactly what's
-// still simplified (no per-pixel button masks, native <input>/confirm()
-// instead of the real GUI toolkit; equipment/food/water/resistance are
-// rendered as the fixed values a fresh level-1 character always has, not
-// modeled per-character state, since there's no inventory or game-clock
-// system yet).
 export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: CharacterCreationAssets = {}): CharacterCreationHandle {
   const canvas = ctx.canvas;
   const root = canvas.parentElement;
@@ -205,10 +195,6 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   nameInput.style.position = 'absolute';
   nameInput.style.font = '11px monospace';
   nameInput.style.padding = '0 2px';
-  // Reference shows the name field as a solid black box with bright yellow
-  // bitmap-font text and a blinking underscore cursor; a native <input>'s
-  // caret is a plain vertical bar and can't reproduce the underscore look,
-  // but background/text/caret color should still match.
   nameInput.style.background = '#000';
   nameInput.style.color = '#eee84c';
   nameInput.style.border = 'none';
@@ -646,10 +632,6 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     } else {
     ctx.fillStyle = '#111';
     ctx.fillRect(PANEL.x, PANEL.y, PANEL.width, PANEL.height);
-    // The reference renders this whole strip as carved-stone panel art (a
-    // chain-and-skull column left of the portrait box, rope/carving around
-    // it, a separate frame around "Vše znovu") — there's no asset hook for
-    // that yet in CharacterCreationAssets, so it stays a flat fill.
     drawRosterBox();
     }
 
