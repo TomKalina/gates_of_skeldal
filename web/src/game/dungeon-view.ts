@@ -178,9 +178,6 @@ const PARTY_BAR_WIDTH = 5;
 const PARTY_BAR_GAP = 2;
 const PARTY_PORTRAIT_WIDTH = 58;
 const PARTY_BOX_WIDTH = PARTY_PORTRAIT_WIDTH + (PARTY_BAR_WIDTH + PARTY_BAR_GAP) * 3 + 4;
-// Left margin reserved for the reference's decorative chain-and-skull
-// column — no asset hook for that art exists yet (same gap as the chargen
-// panel), so it stays a flat fill.
 const PARTY_ROW_X = 24;
 
 // TS counterpart of the first static view shown by builder.c's render_scene
