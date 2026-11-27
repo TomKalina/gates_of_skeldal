@@ -120,9 +120,7 @@ export function createCharacter(
 // inv_size is exhausted — the source's real early exit. Returns whichever
 // leading items didn't fit, unchanged, for the caller to keep "on the
 // cursor". The real PL_SIP arrow-merge shortcut (arrows go into `arrows`
-// instead of a slot) isn't ported yet — ITEMS.DAT's `umisteni`/`druh`
-// fields aren't parsed by this port's items-file.ts, so every item here
-// always takes a normal slot.
+// instead of a slot) isn't ported yet.
 export function depositItems(character: Character, items: readonly number[]): { character: Character; leftover: readonly number[] } {
   const inv = character.inv.slice();
   let pos = 0;

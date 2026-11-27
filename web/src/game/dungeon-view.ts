@@ -223,10 +223,6 @@ export function runDungeonView(
   let arrowAnim: { button: ArrowButton; phase: number } | null = null;
   let compassPhase = 0;
   let statusText = '';
-  // game/inv.c's inventory/equipment screen (Phase D2a: chrome + open/close
-  // only, see inventory-view.ts's own header comment for what's deferred).
-  // Always shows the first party member — real inv.c switches via clicking
-  // the party portrait strip (`start_invetory`), not built yet.
   let inventoryOpen = false;
   let selected = 0;
   let statsMode = false;
@@ -354,12 +350,7 @@ export function runDungeonView(
   // levels, one bucket per level, no interpolation): fraction of original
   // color retained at depth d is (14-3d)/14 for the fade-to-map-color half,
   // (5-d)/5 for the fade-to-black half — so alpha (fraction of the *target*
-  // color mixed in) is 3d/14 or d/5 respectively. Applying this as ONE flat
-  // overlay after every layer (arch+main+sec, or the side-wall image) has
-  // been drawn onto a cell's rect is mathematically identical to shading
-  // each texture independently before compositing them (same alpha/target
-  // for every layer at a given depth — alpha-over composition distributes
-  // over blending), not merely a visual approximation.
+  // color mixed in) is 3d/14 or d/5 respectively.
   function applyDepthShade(cell: ViewCell, x: number, y: number, width: number, height: number): void {
     const shaded = state.map.sectors[cell.sector]?.shaded ?? false;
     const alpha = shaded ? cell.depth / 5 : (3 * cell.depth) / 14;
@@ -486,8 +477,6 @@ export function runDungeonView(
       const image = textures.main.get(cell.frontSecTexture);
       if (image) paint(image, secondaryWallRect(rect, image.width, image.height, cell.frontSecOffset.x, cell.frontSecOffset.y));
     }
-    // One overlay covering every layer just drawn (arch/main/sec) — see
-    // applyDepthShade's own comment for why this is exact, not approximate.
     if (missing) applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
   }
 
@@ -1048,7 +1037,7 @@ export function runDungeonView(
     // Depositing a held item into a party member's backpack by clicking
     // their portrait box — real inv.c's start_invetory else-branch (the
     // if-branch, switching the open inventory screen to the clicked member,
-    // isn't wired: inventoryOpen always shows party[0], see its own comment).
+    // isn't wired).
     const slot = partySlotAt(x, y);
     if (slot !== null) {
       if (!heldItem) {
@@ -1185,8 +1174,7 @@ export function runDungeonView(
 
   function onKeydown(e: KeyboardEvent): void {
     // game/realgame.c: scancode 0x17 ('I') opens the inventory; exit_inv()
-    // (Escape here — the real screen's own catch-all click rect isn't wired
-    // yet) returns to the dungeon view untouched.
+    // (Escape here) returns to the dungeon view untouched.
     if (inventoryOpen) {
       if (e.code === 'Escape' || e.code === 'KeyI') {
         closeInventory();

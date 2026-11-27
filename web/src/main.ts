@@ -221,8 +221,7 @@ const WALL_TRANSPARENT_INDEX = 1;
 // bank is safe.
 const SIDE_WALL_TRANSPARENT_INDICES = [0, WALL_TRANSPARENT_INDEX];
 
-// A niche-flagged side's own front-wall texture (see
-// VERTICALLY_FLIPPED_TEXTURES above for its orientation fix) reserves a
+// A niche-flagged side's own front-wall texture reserves a
 // *second* colorkey index (0) on top of the
 // usual wall/decoration one (1) — verified against LES1A23A.PCX, where
 // index 0 is a separately-painted red "background" covering 27% of the
@@ -263,9 +262,7 @@ function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> 
 }
 
 // show_cel2's rev==2 branch always mirrors the OBL2_NUM (right-arch) bank's
-// screen-write direction, unconditionally — not a per-file judgment call
-// like VERTICALLY_FLIPPED_TEXTURES, a structural rule confirmed straight
-// from the source (see codecs/pcx.ts's flipImageDataHorizontally). Applied
+// screen-write direction, unconditionally (see codecs/pcx.ts's flipImageDataHorizontally). Applied
 // to every entry in the bank once, at load time.
 function flipTextureSetHorizontally(textures: ReadonlyMap<number, ImageData>): ReadonlyMap<number, ImageData> {
   const flipped = new Map<number, ImageData>();
