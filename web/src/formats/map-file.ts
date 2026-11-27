@@ -127,6 +127,7 @@ export const SD_AUTOANIM = 0x800000;
 // SD_HAS_NICHE here is this port's own name for it (the C source calls it
 // SD_RECESS).
 export const SD_HAS_NICHE = 0x10;
+export const SD_POSITION = 0x60;
 
 // realgame.c's do_action() action codes (TSTENA byte offset 15, `action`).
 // A_OPEN_CLOSE toggles a door: verified against LESPRED.MAP sector 14's
@@ -170,6 +171,8 @@ export interface MapSide {
   // the originally-touched sector/dir) or MC_TOUCHSUC (same).
   sectorTag: number;
   sideTag: number;
+  xsec?: number;
+  ysec?: number;
 }
 
 // do_action's A_OPEN_CLOSE case exactly: `if (!(q->flags & SD_PRIM_ANIM))
@@ -425,6 +428,8 @@ function parseSides(bytes: Uint8Array, view: DataView): MapSide[] {
       oblouk: bytes[o + 2] ?? 0,
       sideTag: bytes[o + 3] ?? 0,
       sectorTag: view.getUint16(o + 4, true),
+      xsec: view.getInt8(o + 6),
+      ysec: view.getInt8(o + 7),
       flags: view.getUint32(o + 8, true),
       primAnim: bytes[o + 12] ?? 0,
       secAnim: bytes[o + 13] ?? 0,

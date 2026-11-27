@@ -12,8 +12,9 @@ import type { HotspotMask } from './gui/hotspot-mask';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
 import { parseItemsFile } from './formats/items-file';
+import { orientWallTextures } from './game/wall-textures';
 import { parseEncFile } from './formats/enc-file';
-import { decodePcx, flipImageDataHorizontally, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
+import { decodePcx, flipImageDataHorizontally, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
@@ -174,56 +175,6 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
 // stretched white rectangle.
 const EMPTY_TEXTURE_NAME = 'EMPTY.PCX';
 
-// A subset of wall/door/decoration PCX assets are authored stored top-to-
-// bottom flipped relative to the rest — no map-data flag (oblouk/
-// SD_HAS_NICHE), PCX header field, or filename pattern predicts which ones;
-// confirmed per-file only by decoding each candidate and visually judging
-// raw vs. flipped against physical plausibility (door hinges/handles/
-// thresholds, roof-over-wall, canopy-over-roots, archway-curves-up-not-
-// down). This replaces an earlier, narrower hypothesis that tied the flip
-// to SD_HAS_NICHE (a real map-data bit, but only coincidentally correlated
-// — see git history — most of these entries have no niche flag at all,
-// and one flagged side, the animated table/candle LES1A21-24A, needed the
-// flip anyway). Verified across every non-floor/ceiling texture LESPRED.MAP
-// uses (main + left/right banks) via a systematic raw-vs-flipped visual
-// survey; a handful of near-symmetric tileable wood-plank textures were
-// genuinely ambiguous either way and left unflipped since it makes no
-// visible difference. Known-incomplete for other maps — revisit alongside
-// the double-colorkey index list (below) once D3 makes them reachable.
-//
-// Correction (2026-07-19): LES1A03-06* were removed after a user report
-// that the sector-15 door (this map's other A_OPEN_CLOSE door, sec=7,
-// spanning LES1A01A..08A across its 8-frame swing) looked wrong specifically
-// mid-swing. The survey had decoded every candidate with only the single
-// wall/decoration colorkey (index 1) — correct for most files, but this
-// door's frames also need the SECOND index (0) that
-// doubleColorkeyMainTextureIndices already applies for every A_OPEN_CLOSE
-// frame at actual render time. Un-punched, that second index left a bright
-// red sliver across the top of frames 03A-06A in the survey dump, which
-// both a reviewing agent and a first-pass manual check misread as "this
-// image is upside down" rather than "this image has an unrelated colorkey
-// bug in this dump." Re-decoding with the real double-key applied shows
-// all 8 frames (01A-08A) already read as one coherent, consistently-
-// oriented door swing (hinges/handle at a fixed natural height, threshold
-// always at the bottom) — no flip needed anywhere in this sequence. The
-// other door (sec=15, LES1A11A..18A) was re-checked the same way and holds
-// up as never needing a flip either. Lesson: any texture covered by
-// doubleColorkeyMainTextureIndices (niche or door frames) must be
-// re-decoded with that same double-key before judging its orientation —
-// a single-key survey dump of one of these can look "wrong" for reasons
-// that have nothing to do with orientation.
-const VERTICALLY_FLIPPED_TEXTURES = new Set(
-  [
-    'LES1A21A', 'LES1A22A', 'LES1A23A', 'LES1A24A',
-    'LES1W03A',
-    'LES1W15A', 'LES1W15B',
-    'LES1W16A', 'LES1W16B',
-    'LES1W18A', 'LES1W18B',
-    'LES1W19A', 'LES1W19B',
-    'PRECW07A', 'PRECW07B',
-  ].map((name) => `${name}.PCX`),
-);
-
 function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
@@ -242,9 +193,7 @@ function loadTextureSet(
         : transparentIndex !== undefined
           ? { transparentIndex }
           : {};
-    let image = pcxToImageData(decodePcx(raw, options));
-    if (VERTICALLY_FLIPPED_TEXTURES.has(name.toUpperCase())) image = flipImageDataVertically(image);
-    textures.set(key, image);
+    textures.set(key, pcxToImageData(decodePcx(raw, options)));
   });
   return textures;
 }
@@ -342,7 +291,7 @@ function loadItemTextures(archive: DDLArchive, itemAppearance: readonly (string 
 
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap, itemAppearance: readonly (string | null)[]): DungeonTextureSet {
   const doubleKey = doubleColorkeyMainTextureIndices(map);
-  return {
+  return orientWallTextures({
     main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, doubleKey),
     left: loadTextureSet(archive, map.leftTextures, SIDE_WALL_TRANSPARENT_INDICES),
     right: loadTextureSet(archive, map.rightTextures, SIDE_WALL_TRANSPARENT_INDICES),
@@ -355,7 +304,7 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap, itemAppearanc
     archLeft: loadTextureSet(archive, map.archLeftTextures, SIDE_WALL_TRANSPARENT_INDICES),
     archRight: flipTextureSetHorizontally(loadTextureSet(archive, map.archRightTextures, SIDE_WALL_TRANSPARENT_INDICES)),
     item: loadItemTextures(archive, itemAppearance),
-  };
+  });
 }
 
 const ARROW_STRIP_FILES: readonly [ArrowButton, string][] = [

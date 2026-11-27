@@ -277,8 +277,8 @@ describe('parseMapFile', () => {
 
   it('exposes sides indexed by sector*4+direction via sideAt', () => {
     const map = parseMapFile(buildMapBuffer());
-    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
-    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 });
+    expect(sideAt(map, 0, 0)).toEqual({ prim: 1, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, xsec: 0, ysec: 0, flags: 0, primAnim: 0, secAnim: 0, action: 0 });
+    expect(sideAt(map, 0, 1)).toEqual({ prim: 2, sec: 0, oblouk: 0, sectorTag: 0, sideTag: 0, xsec: 0, ysec: 0, flags: SD_PLAY_IMPS | SD_PRIM_VIS, primAnim: 0, secAnim: 0, action: 0 });
   });
 
   it('parses sideTag (byte 3) and sectorTag (u16 LE at byte 4) — a_touch\'s real action-redirect target, not necessarily the side itself', () => {

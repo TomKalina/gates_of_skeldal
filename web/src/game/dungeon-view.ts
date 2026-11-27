@@ -1,6 +1,7 @@
 import { behind, canStep, computeVisibleGrid, stepToward, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, runConfiguredAction, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
 import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
+import { primaryWallRect, secondaryWallRect, type WallRect } from './wall-textures';
 import { readSave, writeSave } from './save';
 import { depositItems, type Character } from './party';
 import { faceThumbnail, imageDataToCanvas } from './portraits';
@@ -364,6 +365,36 @@ export function runDungeonView(
     ctx.globalAlpha = 1;
   }
 
+  const shadeCache = new WeakMap<ImageData, Map<string, HTMLCanvasElement>>();
+  function shadedDrawable(cell: ViewCell, image: ImageData): HTMLCanvasElement {
+    const shaded = state.map.sectors[cell.sector]?.shaded ?? false;
+    const alpha = shaded ? cell.depth / 5 : (3 * cell.depth) / 14;
+    if (alpha <= 0) return toDrawable(image);
+    const { r, g, b } = state.map.fadeColor;
+    const color = shaded ? '#000000' : `rgb(${r}, ${g}, ${b})`;
+    const key = `${color}/${alpha}`;
+    let variants = shadeCache.get(image);
+    if (!variants) {
+      variants = new Map();
+      shadeCache.set(image, variants);
+    }
+    let canvas = variants.get(key);
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const c = canvas.getContext('2d');
+      if (!c) throw new Error('2D canvas context unavailable');
+      c.drawImage(toDrawable(image), 0, 0);
+      c.globalCompositeOperation = 'source-atop';
+      c.globalAlpha = alpha;
+      c.fillStyle = color;
+      c.fillRect(0, 0, image.width, image.height);
+      variants.set(key, canvas);
+    }
+    return canvas;
+  }
+
   function drawSideWall(cell: ViewCell, near: Rect, far: Rect, side: 'left' | 'right', image: ImageData | undefined): void {
     ctx.save();
     ctx.beginPath();
@@ -415,6 +446,10 @@ export function runDungeonView(
   // behind it by the time this runs and shows through the gaps.
   function drawFrontWall(cell: ViewCell): void {
     const rect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
+    let missing = false;
+    const paint = (image: ImageData, r: WallRect): void => {
+      ctx.drawImage(shadedDrawable(cell, image), r.x, r.y, r.width, r.height);
+    };
     // draw_basic_sector draws the arch overlay(s) *before* the main/sec
     // wall texture — a decorative frame painted behind whatever art
     // (door, window, plain wall) sits in front of it, at the exact same
@@ -422,19 +457,20 @@ export function runDungeonView(
     // applies plac to these two calls).
     if (cell.frontArchLeftTexture !== null) {
       const image = textures.archLeft.get(cell.frontArchLeftTexture);
-      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+      if (image) paint(image, primaryWallRect(rect, image.width, image.height, 0));
     }
     if (cell.frontArchRightTexture !== null) {
       const image = textures.archRight.get(cell.frontArchRightTexture);
-      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+      if (image) paint(image, primaryWallRect(rect, image.width, image.height, 0, true));
     }
     if (cell.frontWallTexture !== null) {
       const image = textures.main.get(cell.frontWallTexture);
       if (image) {
-        ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+        paint(image, primaryWallRect(rect, image.width, image.height, cell.frontPlac));
       } else {
         ctx.fillStyle = '#553';
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+        missing = true;
       }
     }
     // Secondary slot (sec/secAnim) is a fully independent texture from prim
@@ -442,11 +478,11 @@ export function runDungeonView(
     // texture at all (prim=0) and shows entirely through sec.
     if (cell.frontSecTexture !== null) {
       const image = textures.main.get(cell.frontSecTexture);
-      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+      if (image) paint(image, secondaryWallRect(rect, image.width, image.height, cell.frontSecOffset.x, cell.frontSecOffset.y));
     }
     // One overlay covering every layer just drawn (arch/main/sec) — see
     // applyDepthShade's own comment for why this is exact, not approximate.
-    applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
+    if (missing) applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
   }
 
   // engine1.c: `static int items_indextab[][2]={{0,0},{-1,3},{1,7},{-1,7},
@@ -706,12 +742,10 @@ export function runDungeonView(
 
     // Farthest first, so a nearer transparent wall's colorkey-punched gaps
     // reveal whatever farther geometry was already painted behind it.
-    const byDepthDescending = [...grid].sort((a, b) => b.depth - a.depth);
+    const byDepthDescending = [...grid].sort((a, b) => b.depth - a.depth || Math.abs(b.lateral) - Math.abs(a.lateral));
     for (const cell of byDepthDescending) {
       drawFloorCeilCell(cell, 0);
       drawFloorCeilCell(cell, 1);
-    }
-    for (const cell of byDepthDescending) {
       drawSideWalls(cell);
       drawFrontWall(cell);
     }
