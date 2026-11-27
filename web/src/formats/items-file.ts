@@ -14,9 +14,13 @@
 // `ablock(vzhled+face_arr[0])`). Sections 2-5 (other facings, spell-effect
 // frames, weapon-attack .mgf animations) and the sound-name section are for
 // combat/inventory-UI features not in scope yet — read past, not stored.
+import { parseItems, type ItemDef } from '../game/items';
+
 const BLOCK_TAG = '<BLOCK>\0';
 const TAG_LENGTH = 8;
 const SECTION_FACE0 = 1;
+const SECTION_WORN_MALE = 2;
+const SECTION_WORN_FEMALE = 3;
 const SECTION_ITEM_LIST = 0x8001;
 const SECTION_END = 0x8000;
 
@@ -27,6 +31,9 @@ export interface ItemsFile {
   // itemAppearance[itemNumber - 1] = this item's floor-appearance texture
   // filename, or null if it has none (TITEM.vzhled === 0).
   itemAppearance: readonly (string | null)[];
+  items: readonly ItemDef[];
+  wornMale: readonly string[];
+  wornFemale: readonly string[];
 }
 
 function readCString(bytes: Uint8Array, start: number, end: number): string {
@@ -54,6 +61,9 @@ export function parseItemsFile(buffer: ArrayBuffer): ItemsFile {
 
   let pos = 0;
   let faceTextures: string[] = [];
+  let wornMale: string[] = [];
+  let wornFemale: string[] = [];
+  let items: ItemDef[] = [];
   let vzhledByItem: number[] = [];
 
   for (;;) {
@@ -71,7 +81,12 @@ export function parseItemsFile(buffer: ArrayBuffer): ItemsFile {
 
     if (sectionType === SECTION_FACE0) {
       faceTextures = readNulSeparatedList(payload);
+    } else if (sectionType === SECTION_WORN_MALE) {
+      wornMale = readNulSeparatedList(payload);
+    } else if (sectionType === SECTION_WORN_FEMALE) {
+      wornFemale = readNulSeparatedList(payload);
     } else if (sectionType === SECTION_ITEM_LIST) {
+      items = parseItems(payload);
       const count = Math.floor(size / TITEM_SIZE);
       vzhledByItem = new Array<number>(count);
       for (let i = 0; i < count; i++) {
@@ -83,5 +98,5 @@ export function parseItemsFile(buffer: ArrayBuffer): ItemsFile {
   }
 
   const itemAppearance = vzhledByItem.map((vzhled) => (vzhled > 0 ? (faceTextures[vzhled - 1] ?? null) : null));
-  return { itemAppearance };
+  return { itemAppearance, items, wornMale, wornFemale };
 }

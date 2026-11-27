@@ -1,4 +1,5 @@
 import { BG_BLEND, drawAlignedText, fontColors, glyphSize, rgb555, transBar, type Align, type BitmapFont, type FontColors } from '../gfx/bitmap-font';
+import { baseVlastnosti, VLS } from './inventory';
 import type { Character, PrimaryStat } from './party';
 
 export const SHEET_ORIGIN = { x: 325, y: 67 };
@@ -23,32 +24,32 @@ export interface SheetFonts {
 interface SheetEntry {
   col: number;
   line: number;
-  text: (c: Character) => string;
+  text: (c: Character, v: readonly number[]) => string;
   align: Align;
   label?: boolean;
   bonus?: boolean;
 }
 
-const PRIMARY: readonly { line: number; stat: PrimaryStat; label: string }[] = [
-  { line: 12, stat: 'strength', label: 'Síla' },
-  { line: 14, stat: 'magic', label: 'Umění magie' },
-  { line: 16, stat: 'speed', label: 'Pohyblivost' },
-  { line: 18, stat: 'dexterity', label: 'Obratnost' },
+const PRIMARY: readonly { line: number; stat: PrimaryStat; vls: number; label: string }[] = [
+  { line: 12, stat: 'strength', vls: VLS.SILA, label: 'Síla' },
+  { line: 14, stat: 'magic', vls: VLS.SMAGIE, label: 'Umění magie' },
+  { line: 16, stat: 'speed', vls: VLS.POHYB, label: 'Pohyblivost' },
+  { line: 18, stat: 'dexterity', vls: VLS.OBRAT, label: 'Obratnost' },
 ];
 
-const value = (fn: (c: Character) => string | number) => (c: Character) => String(fn(c));
+const value = (fn: (c: Character, v: readonly number[]) => string | number) => (c: Character, v: readonly number[]) => String(fn(c, v));
 const fixed = (text: string) => () => text;
 const label = (col: number, line: number, text: string, bonus = false): SheetEntry => ({ col, line, text: fixed(text), align: 0, label: true, bonus });
-const right = (col: number, line: number, text: (c: Character) => string, bonus = false): SheetEntry => ({ col, line, text, align: 2, bonus });
+const right = (col: number, line: number, text: (c: Character, v: readonly number[]) => string, bonus = false): SheetEntry => ({ col, line, text, align: 2, bonus });
 
 const WEAPONS = ['Meč:', 'Sekera:', 'Kladivo:', 'Hůl:', 'Dýka:', 'Střelné:', 'Specialní:'];
 const RESISTANCES = ['Oheň', 'Voda', 'Země', 'Vzduch', 'Mysl'];
 
 const SCRIPT: readonly SheetEntry[] = [
-  ...PRIMARY.map((p) => right(15, p.line, value((c) => c.stats[p.stat]), true)),
-  right(15, 5, value((c) => `${c.stats.maxHp}/${c.stats.maxHp}`)),
-  right(15, 7, value((c) => `${c.stats.maxMana}/${c.stats.maxMana}`)),
-  right(15, 9, value((c) => `${c.stats.stamina}/${c.stats.stamina}`)),
+  ...PRIMARY.map((p) => right(15, p.line, value((_, v) => v[p.vls]!), true)),
+  right(15, 5, value((_, v) => `${v[VLS.MAXHIT]}/${v[VLS.MAXHIT]}`)),
+  right(15, 7, value((_, v) => `${v[VLS.MAXMANA]}/${v[VLS.MAXMANA]}`)),
+  right(15, 9, value((_, v) => `${v[VLS.KONDIC]}/${v[VLS.KONDIC]}`)),
   right(15, 20, value((c) => c.bonusPoints)),
   ...WEAPONS.map((_, i) => right(15, 25 + i * 2, fixed('0'))),
   label(0, 0, 'Úroveň'),
@@ -62,13 +63,13 @@ const SCRIPT: readonly SheetEntry[] = [
   label(0, 20, 'Bonus'),
   label(0, 23, 'Bonusy zbraní:'),
   ...WEAPONS.map((w, i) => label(0, 25 + i * 2, w)),
-  right(30, 5, fixed('1-2')),
-  right(30, 7, fixed('1-2')),
-  right(30, 9, value((c) => Math.floor(c.stats.speed / AP_MULTIPLIER))),
+  right(30, 5, value((_, v) => `${v[VLS.UTOK_L]}-${v[VLS.UTOK_H]}`)),
+  right(30, 7, value((_, v) => `${v[VLS.OBRAN_L]}-${v[VLS.OBRAN_H]}`)),
+  right(30, 9, value((_, v) => Math.floor(v[VLS.POHYB]! / AP_MULTIPLIER))),
   label(17, 5, 'Útok'),
   label(17, 7, 'Obrana'),
   label(17, 9, 'Akce'),
-  ...RESISTANCES.map((_, i) => right(30, 14 + i * 2, fixed('0'))),
+  ...RESISTANCES.map((_, i) => right(30, 14 + i * 2, value((_c, v) => v[VLS.OHEN + i]!))),
   label(17, 12, 'Ochrany:'),
   ...RESISTANCES.map((r, i) => label(17, 14 + i * 2, r)),
 ];
@@ -78,12 +79,12 @@ function entryColor(entry: SheetEntry, character: Character): number {
   return entry.label ? BONUS_LABEL : BONUS_VALUE;
 }
 
-export function maxFood(character: Character): number {
-  return Math.floor(character.stats.maxHp / 2) + 48;
+export function maxFood(vls: readonly number[]): number {
+  return Math.floor(vls[VLS.MAXHIT]! / 2) + 48;
 }
 
-export function maxWater(character: Character): number {
-  return Math.floor(character.stats.maxHp / 3) + 24;
+export function maxWater(vls: readonly number[]): number {
+  return Math.floor(vls[VLS.MAXHIT]! / 3) + 24;
 }
 
 function sunkenBorder(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
@@ -116,13 +117,13 @@ function entryPosition(col: number, line: number): { x: number; y: number } {
   return { x: SHEET_ORIGIN.x + col * COL_STEP, y: SHEET_ORIGIN.y + line * LINE_STEP };
 }
 
-export function drawStatsSheet(ctx: CanvasRenderingContext2D, fonts: SheetFonts, character: Character): void {
+export function drawStatsSheet(ctx: CanvasRenderingContext2D, fonts: SheetFonts, character: Character, vls: readonly number[] = baseVlastnosti(character)): void {
   for (const entry of SCRIPT) {
     const { x, y } = entryPosition(entry.col, entry.line);
-    drawAlignedText(ctx, fonts.text, entry.text(character), x, y, entry.align, 0, fontColors(entryColor(entry, character)));
+    drawAlignedText(ctx, fonts.text, entry.text(character, vls), x, y, entry.align, 0, fontColors(entryColor(entry, character)));
   }
-  percentBar(ctx, fonts.text, SHEET_ORIGIN.x + 140, SHEET_ORIGIN.y + 170, maxFood(character), maxFood(character), FOOD_COLOR, 'Jídlo');
-  percentBar(ctx, fonts.text, SHEET_ORIGIN.x + 140, SHEET_ORIGIN.y + 210, maxWater(character), maxWater(character), WATER_COLOR, 'Voda');
+  percentBar(ctx, fonts.text, SHEET_ORIGIN.x + 140, SHEET_ORIGIN.y + 170, maxFood(vls), maxFood(vls), FOOD_COLOR, 'Jídlo');
+  percentBar(ctx, fonts.text, SHEET_ORIGIN.x + 140, SHEET_ORIGIN.y + 210, maxWater(vls), maxWater(vls), WATER_COLOR, 'Voda');
   for (const rect of Object.values(plusButtonRects(fonts, character))) {
     drawAlignedText(ctx, fonts.symbols, '+', rect.x, rect.y, 0, 0, PLUS_COLORS);
   }

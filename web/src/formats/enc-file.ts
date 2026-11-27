@@ -67,7 +67,7 @@ function decodeRunningSumCipher(bytes: Uint8Array): Uint8Array {
   return out;
 }
 
-function kamenickyToUnicode(bytes: Uint8Array): string {
+export function kamenickyToUnicode(bytes: Uint8Array): string {
   const windows1250 = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) windows1250[i] = KAMENICKY_TABLE[bytes[i]!]!;
   return new TextDecoder('windows-1250').decode(windows1250);

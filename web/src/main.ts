@@ -11,7 +11,8 @@ import { MENU_ITEMS } from './gui/menu-nav';
 import type { HotspotMask } from './gui/hotspot-mask';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
-import { parseItemsFile } from './formats/items-file';
+import { parseItemsFile, type ItemsFile } from './formats/items-file';
+import { decodeIcon, iconLibName } from './game/item-icons';
 import { orientWallTextures } from './game/wall-textures';
 import { parseEncFile } from './formats/enc-file';
 import { decodePcx, flipImageDataHorizontally, pcxToImageData } from './codecs/pcx';
@@ -360,8 +361,40 @@ function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | und
 // colorkey convention as chargen's roster) rather than threading them
 // through from character-creation.ts — each screen loads its own assets,
 // same convention loadDungeonChromeAssets/loadDungeonTextures already use.
-function loadInventoryAssets(archive: DDLArchive): InventoryAssets {
+function loadWornSprites(archive: DDLArchive, names: readonly string[]): Map<number, ImageData> {
+  const sprites = new Map<number, ImageData>();
+  names.forEach((name, i) => {
+    const image = decodeIfPresent(archive, name, 0);
+    if (image) sprites.set(i + 1, image);
+  });
+  return sprites;
+}
+
+function iconLoader(archive: DDLArchive): (icon: number) => ImageData | undefined {
+  const cache = new Map<number, ImageData | undefined>();
+  return (icon) => {
+    if (icon < 0) return undefined;
+    if (!cache.has(icon)) {
+      const lib = archive.extract(iconLibName(icon));
+      cache.set(icon, lib ? decodeIcon(lib, icon) : undefined);
+    }
+    return cache.get(icon);
+  };
+}
+
+function loadInventoryAssets(archive: DDLArchive, itemsFile: ItemsFile | null): InventoryAssets {
   const assets: InventoryAssets = {};
+  assets.svitek = decodeIfPresent(archive, 'SVITEK.PCX');
+  assets.frame = decodeIfPresent(archive, 'RAMECEK.PCX', 0);
+  assets.icon = iconLoader(archive);
+  if (itemsFile) {
+    assets.wornMale = loadWornSprites(archive, itemsFile.wornMale);
+    assets.wornFemale = loadWornSprites(archive, itemsFile.wornFemale);
+  }
+  const fonts = loadChargenFonts(archive);
+  const bold = archive.extract('SADA16.FON');
+  if (bold) assets.boldFont = parseBitmapFont(bold);
+  if (fonts) assets.sheetFonts = { text: fonts.font7, symbols: fonts.symbols };
   const arch = decodeIfPresent(archive, 'IOBLOUK.PCX');
   if (arch) assets.arch = arch;
   const deskPanel = decodeIfPresent(archive, 'IDESKA.PCX');
@@ -411,7 +444,8 @@ async function enterDungeon(
   const mapBuffer = await tryAutoLoadMap(START_MAP);
   if (!mapBuffer) return false;
   const itemsBuffer = await tryAutoLoadMap('ITEMS.DAT');
-  const itemAppearance = itemsBuffer ? parseItemsFile(itemsBuffer).itemAppearance : [];
+  const itemsFile = itemsBuffer ? parseItemsFile(itemsBuffer) : null;
+  const itemAppearance = itemsFile?.itemAppearance ?? [];
 
   // MA_LOADL/MC_PASSFAIL map transitions (dungeon.ts's pendingTransition):
   // ITEMS.DAT is a single global catalog shared by every map (loaded once
@@ -432,7 +466,7 @@ async function enterDungeon(
   const map = parseMapFile(mapBuffer);
   const textures = loadDungeonTextures(archive, map, itemAppearance);
   const levelTexts = await loadLevelTexts(START_MAP);
-  const inventoryAssets = loadInventoryAssets(archive);
+  const inventoryAssets = loadInventoryAssets(archive, itemsFile);
   const { result } = runDungeonView(
     ctx,
     { map, sector: start?.sector ?? map.startSector, direction: start?.direction ?? (map.startDirection as Direction) },
@@ -442,6 +476,7 @@ async function enterDungeon(
     loadMap,
     levelTexts,
     inventoryAssets,
+    { items: itemsFile?.items ?? [] },
   );
   await result; // resolves when KONEC is clicked
   return true;

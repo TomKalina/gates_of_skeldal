@@ -1,6 +1,8 @@
 import { behind, canStep, computeVisibleGrid, stepToward, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, runConfiguredAction, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
-import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
+import { BAG_RECT, drawInventoryScreen, HUMAN_RECT, INV_X, INV_Y, RING_RECTS, SWAP_DESK_RECT, wornSlotAt, type InfoBox, type InventoryAssets } from './inventory-view';
+import { bagClick, bagSlotAt, canWear, computeVlastnosti, humanClick, itemRequirements, ringClick, type InventoryResult } from './inventory';
+import type { ItemDef } from './items';
 import { primaryWallRect, secondaryWallRect, type WallRect } from './wall-textures';
 import { readSave, writeSave } from './save';
 import { depositItems, type Character } from './party';
@@ -42,6 +44,7 @@ export interface DungeonWorld {
   macros?: { table: MacroTable; states: Uint8Array };
   consumables?: ReadonlyMap<number, Consumable>;
   endings?: { victory: string; defeat: string };
+  items?: readonly ItemDef[];
 }
 
 // The real dungeon screen's chrome (TOPBAR.PCX, SIPKY.PCX) — all optional
@@ -225,6 +228,9 @@ export function runDungeonView(
   // Always shows the first party member — real inv.c switches via clicking
   // the party portrait strip (`start_invetory`), not built yet.
   let inventoryOpen = false;
+  let selected = 0;
+  let statsMode = false;
+  let info: InfoBox | null = null;
   // game/inv.c's picked_item — the group currently "on the cursor" after a
   // pick_item_ click, waiting to be dropped back on the floor (clicking the
   // same pile again) or deposited into a party member's backpack (clicking
@@ -720,8 +726,17 @@ export function runDungeonView(
 
   function draw(): void {
     if (inventoryOpen) {
-      const character = party[0];
-      if (character) drawInventoryScreen(ctx, character, inventoryAssets);
+      const character = party[selected];
+      if (character) {
+        const items = world.items ?? [];
+        drawInventoryScreen(ctx, { character, vls: computeVlastnosti(character, items, selected), items, statsMode, info }, inventoryAssets);
+      }
+      drawTopBar();
+      drawBottomBar();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, TOPBAR_HEIGHT, canvas.width, 1);
+      ctx.fillRect(0, BOTTOM_BAR.y - 1, canvas.width, 1);
+      drawHeldItemCursor();
       return;
     }
     // Sky-colored, not black: drawFloorCeilBase's single fallback split (see
@@ -872,7 +887,8 @@ export function runDungeonView(
   function drawHeldItemCursor(): void {
     const itemNumber = heldItem?.[0];
     if (itemNumber === undefined) return;
-    const image = textures.item.get(itemNumber);
+    const ikona = world.items?.[Math.abs(itemNumber) - 1]?.ikona;
+    const image = (ikona !== undefined ? inventoryAssets.icon?.(ikona) : undefined) ?? textures.item.get(itemNumber);
     if (!image) return;
     ctx.drawImage(toDrawable(image), cursorX - image.width / 2, cursorY - image.height / 2);
   }
@@ -895,14 +911,99 @@ export function runDungeonView(
     draw();
   }
 
+  function itemInfo(id: number): InfoBox | null {
+    const items = world.items;
+    const it = items?.[Math.abs(id) - 1];
+    const character = party[selected];
+    if (!items || !it || !character) return null;
+    return {
+      title: it.jmeno,
+      description: it.popis,
+      requirements: itemRequirements(items, Math.abs(id)),
+      warn: !canWear(computeVlastnosti(character, items, selected), items, Math.abs(id)),
+    };
+  }
+
+  function updateInventoryInfo(x: number, y: number): void {
+    const character = party[selected];
+    if (heldItem) {
+      info = y <= BOTTOM_BAR.y ? itemInfo(heldItem[0]!) : null;
+      return;
+    }
+    if (statsMode || !character || !rectContains(BAG_RECT, x, y)) {
+      info = null;
+      return;
+    }
+    const pos = bagSlotAt(x - INV_X, y - INV_Y);
+    const id = pos < character.invSize ? (character.inv[pos] ?? 0) : 0;
+    info = id ? itemInfo(id) : null;
+  }
+
+  function applyInventory(result: InventoryResult | null): void {
+    if (!result) return;
+    party = party.map((m, i) => (i === selected ? result.character : m));
+    heldItem = result.held ? [...result.held] : null;
+    for (const group of result.dropped) putBackFloorItem(state.map, state.sector, state.direction, 0, group);
+  }
+
+  function openInventory(index: number): void {
+    const member = party[index];
+    if (!member) return;
+    selected = index;
+    inventoryOpen = true;
+    statsMode = member.bonusPoints !== 0 && !heldItem;
+    info = null;
+  }
+
+  function closeInventory(): void {
+    inventoryOpen = false;
+    statsMode = false;
+    info = null;
+  }
+
+  function onInventoryMouseDown(e: MouseEvent, x: number, y: number): void {
+    const items = world.items ?? [];
+    const character = party[selected];
+    const slot = partySlotAt(x, y);
+    if (e.button === 2) {
+      if (slot !== null && heldItem) {
+        const { character: member, leftover } = depositItems(party[slot]!, heldItem);
+        party = party.map((m, idx) => (idx === slot ? member : m));
+        heldItem = leftover.length > 0 ? [...leftover] : null;
+      } else if (slot === null) {
+        closeInventory();
+      }
+    } else if (e.button === 0 && character) {
+      if (rectContains(BAG_RECT, x, y)) {
+        if (!statsMode) applyInventory(bagClick(character, heldItem, bagSlotAt(x - INV_X, y - INV_Y), items, selected));
+      } else if (RING_RECTS.some((r) => rectContains(r, x, y))) {
+        applyInventory(ringClick(character, heldItem, RING_RECTS.findIndex((r) => rectContains(r, x, y)), items, selected));
+      } else if (rectContains(HUMAN_RECT, x, y)) {
+        const pointed = heldItem ? null : wornSlotAt(character, items, inventoryAssets, x, y);
+        applyInventory(humanClick(character, heldItem, x - HUMAN_RECT.x, pointed, items, selected));
+      } else if (rectContains(SWAP_DESK_RECT, x, y)) {
+        statsMode = !statsMode;
+      } else if (slot !== null && slot !== selected && !heldItem) {
+        openInventory(slot);
+      }
+    }
+    updateInventoryInfo(x, y);
+    cursorX = x;
+    cursorY = y;
+    draw();
+  }
+
   function onMouseDown(e: MouseEvent): void {
-    if (inventoryOpen) return; // clicking a slot/ring/doll isn't wired yet — see inventory-view.ts
     const rect = canvas.getBoundingClientRect();
     const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
     const offX = rect.left + (rect.width - canvas.width * scale) / 2;
     const offY = rect.top + (rect.height - canvas.height * scale) / 2;
     const x = (e.clientX - offX) / scale;
     const y = (e.clientY - offY) / scale;
+    if (inventoryOpen) {
+      onInventoryMouseDown(e, x, y);
+      return;
+    }
 
     if (rectContains(TOPBAR_BUTTONS.konec, x, y)) {
       dispose();
@@ -1025,6 +1126,14 @@ export function runDungeonView(
     const x = (e.clientX - offX) / scale;
     const y = (e.clientY - offY) / scale;
 
+    if (inventoryOpen) {
+      const before = info;
+      updateInventoryInfo(x, y);
+      cursorX = x;
+      cursorY = y;
+      if (heldItem || before !== info) draw();
+      return;
+    }
     if (heldItem) {
       cursorX = x;
       cursorY = y;
@@ -1070,13 +1179,17 @@ export function runDungeonView(
     draw();
   }
 
+  function onContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+  }
+
   function onKeydown(e: KeyboardEvent): void {
     // game/realgame.c: scancode 0x17 ('I') opens the inventory; exit_inv()
     // (Escape here — the real screen's own catch-all click rect isn't wired
     // yet) returns to the dungeon view untouched.
     if (inventoryOpen) {
-      if (e.code === 'Escape') {
-        inventoryOpen = false;
+      if (e.code === 'Escape' || e.code === 'KeyI') {
+        closeInventory();
         draw();
       }
       return;
@@ -1095,7 +1208,7 @@ export function runDungeonView(
         turn('turnRight');
         return;
       case 'KeyI':
-        inventoryOpen = true;
+        openInventory(selected);
         draw();
         return;
       case 'Digit1':
@@ -1148,12 +1261,14 @@ export function runDungeonView(
   function dispose(): void {
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('mousemove', onMouseMove);
+    canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('keydown', onKeydown);
     cancelAnimationFrame(animationFrameId);
   }
 
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('keydown', onKeydown);
   draw();
   animationFrameId = requestAnimationFrame(tickLoop);
