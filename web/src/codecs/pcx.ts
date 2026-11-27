@@ -118,12 +118,6 @@ export function pcxToImageData(image: PcxImage): ImageData {
   return new ImageData(image.rgba, image.width, image.height);
 }
 
-// A subset of the game's wall/door/decoration PCX assets are authored
-// stored top-to-bottom flipped relative to the rest — see main.ts's
-// VERTICALLY_FLIPPED_TEXTURES for which ones and how that was determined
-// (no map-data flag or file-header field predicts it; verified per-file by
-// visual inspection). This is the mechanical flip they get baked through
-// once, at texture-load time.
 export function flipImageDataVertically(image: ImageData): ImageData {
   const { width, height, data } = image;
   const flipped = new Uint8ClampedArray(data.length);

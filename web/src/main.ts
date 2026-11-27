@@ -1,8 +1,9 @@
 import { createScreenCanvas } from './platform/canvas-context';
 import { pickDDLFile } from './platform/asset-source';
 import { runMainMenu, type MainMenuAssets } from './game/main-menu';
-import { runCharacterCreation, type CharacterCreationAssets } from './game/character-creation';
-import { runDungeonView, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
+import { runCharacterCreation, type CharacterCreationAssets, type ChargenFonts } from './game/character-creation';
+import { parseBitmapFont } from './gfx/bitmap-font';
+import { runDungeonView, type ArrowButton, type DungeonChromeAssets, type DungeonTextureSet, type MapLoader } from './game/dungeon-view';
 import type { InventoryAssets } from './game/inventory-view';
 import type { Direction } from './game/dungeon';
 import type { Character } from './game/party';
@@ -10,9 +11,11 @@ import { MENU_ITEMS } from './gui/menu-nav';
 import type { HotspotMask } from './gui/hotspot-mask';
 import { openDDLArchive, type DDLArchive } from './formats/ddl-archive';
 import { A_OPEN_CLOSE, parseMapFile, SD_HAS_NICHE, type DungeonMap } from './formats/map-file';
-import { parseItemsFile } from './formats/items-file';
+import { parseItemsFile, type ItemsFile } from './formats/items-file';
+import { decodeIcon, iconLibName } from './game/item-icons';
+import { orientWallTextures } from './game/wall-textures';
 import { parseEncFile } from './formats/enc-file';
-import { decodePcx, flipImageDataHorizontally, flipImageDataVertically, pcxToImageData } from './codecs/pcx';
+import { decodePcx, flipImageDataHorizontally, pcxToImageData } from './codecs/pcx';
 import { readSave } from './game/save';
 
 const START_MAP = 'LESPRED.MAP'; // skeldal.c: default_map, the real new-game starting map
@@ -101,7 +104,23 @@ function loadMenuAssets(archive: DDLArchive): MainMenuAssets {
   if (logoImage) assets.logo = { image: logoImage, y: 56 };
   const hotspotMask = loadHotspotMaskIfPresent(archive, 'MENUVOL5.PCX');
   if (hotspotMask) assets.hotspotMask = hotspotMask;
+  const buttonFrames = [0, 1, 2, 3, 4].map((i) => decodeIfPresent(archive, `MENUVOL${i}.PCX`));
+  if (buttonFrames.every((f) => f)) assets.buttonFrames = buttonFrames as ImageData[];
   return assets;
+}
+
+function loadChargenFonts(archive: DDLArchive): ChargenFonts | undefined {
+  const load = (name: string) => {
+    const raw = archive.extract(name);
+    return raw ? parseBitmapFont(raw) : undefined;
+  };
+  const tiny = load('TINY.FON');
+  const font6 = load('FONT6X9.FON');
+  const font7 = load('SADA7.FON');
+  const litt = load('FONT4X8.FON');
+  const symbols = load('IKONES.FON');
+  if (!tiny || !font6 || !font7 || !litt || !symbols) return undefined;
+  return { tiny, font6, font7, litt, symbols };
 }
 
 function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAssets {
@@ -122,6 +141,20 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
   if (svitek) assets.svitek = svitek;
   const hotspotMask = loadHotspotMaskIfPresent(archive, 'CHARGENM.PCX');
   if (hotspotMask) assets.hotspotMask = hotspotMask;
+  const pearlMask = loadHotspotMaskIfPresent(archive, 'PERLA.PCX');
+  if (pearlMask) assets.pearlMask = pearlMask;
+  const desk = decodeIfPresent(archive, 'DESK.PCX');
+  if (desk) assets.desk = desk;
+  const okno = decodeIfPresent(archive, 'OKNO.PCX');
+  if (okno) assets.okno = okno;
+  const buttonPanel = decodeIfPresent(archive, 'CHARGEN.PCX', 0);
+  if (buttonPanel) assets.buttonPanel = buttonPanel;
+  const buttonPanelDisabled = decodeIfPresent(archive, 'CHARGENB.PCX', 0);
+  if (buttonPanelDisabled) assets.buttonPanelDisabled = buttonPanelDisabled;
+  const faces = loadFaces(archive);
+  if (faces.size > 0) assets.faces = faces;
+  const fonts = loadChargenFonts(archive);
+  if (fonts) assets.fonts = fonts;
 
   const bodySprites = new Map<number, ImageData>();
   for (let i = 0; i < 8; i++) {
@@ -143,56 +176,6 @@ function loadCharacterCreationAssets(archive: DDLArchive): CharacterCreationAsse
 // stretched white rectangle.
 const EMPTY_TEXTURE_NAME = 'EMPTY.PCX';
 
-// A subset of wall/door/decoration PCX assets are authored stored top-to-
-// bottom flipped relative to the rest — no map-data flag (oblouk/
-// SD_HAS_NICHE), PCX header field, or filename pattern predicts which ones;
-// confirmed per-file only by decoding each candidate and visually judging
-// raw vs. flipped against physical plausibility (door hinges/handles/
-// thresholds, roof-over-wall, canopy-over-roots, archway-curves-up-not-
-// down). This replaces an earlier, narrower hypothesis that tied the flip
-// to SD_HAS_NICHE (a real map-data bit, but only coincidentally correlated
-// — see git history — most of these entries have no niche flag at all,
-// and one flagged side, the animated table/candle LES1A21-24A, needed the
-// flip anyway). Verified across every non-floor/ceiling texture LESPRED.MAP
-// uses (main + left/right banks) via a systematic raw-vs-flipped visual
-// survey; a handful of near-symmetric tileable wood-plank textures were
-// genuinely ambiguous either way and left unflipped since it makes no
-// visible difference. Known-incomplete for other maps — revisit alongside
-// the double-colorkey index list (below) once D3 makes them reachable.
-//
-// Correction (2026-07-19): LES1A03-06* were removed after a user report
-// that the sector-15 door (this map's other A_OPEN_CLOSE door, sec=7,
-// spanning LES1A01A..08A across its 8-frame swing) looked wrong specifically
-// mid-swing. The survey had decoded every candidate with only the single
-// wall/decoration colorkey (index 1) — correct for most files, but this
-// door's frames also need the SECOND index (0) that
-// doubleColorkeyMainTextureIndices already applies for every A_OPEN_CLOSE
-// frame at actual render time. Un-punched, that second index left a bright
-// red sliver across the top of frames 03A-06A in the survey dump, which
-// both a reviewing agent and a first-pass manual check misread as "this
-// image is upside down" rather than "this image has an unrelated colorkey
-// bug in this dump." Re-decoding with the real double-key applied shows
-// all 8 frames (01A-08A) already read as one coherent, consistently-
-// oriented door swing (hinges/handle at a fixed natural height, threshold
-// always at the bottom) — no flip needed anywhere in this sequence. The
-// other door (sec=15, LES1A11A..18A) was re-checked the same way and holds
-// up as never needing a flip either. Lesson: any texture covered by
-// doubleColorkeyMainTextureIndices (niche or door frames) must be
-// re-decoded with that same double-key before judging its orientation —
-// a single-key survey dump of one of these can look "wrong" for reasons
-// that have nothing to do with orientation.
-const VERTICALLY_FLIPPED_TEXTURES = new Set(
-  [
-    'LES1A21A', 'LES1A22A', 'LES1A23A', 'LES1A24A',
-    'LES1W03A',
-    'LES1W15A', 'LES1W15B',
-    'LES1W16A', 'LES1W16B',
-    'LES1W18A', 'LES1W18B',
-    'LES1W19A', 'LES1W19B',
-    'PRECW07A', 'PRECW07B',
-  ].map((name) => `${name}.PCX`),
-);
-
 function loadTextureSet(
   archive: DDLArchive,
   names: readonly string[],
@@ -211,9 +194,7 @@ function loadTextureSet(
         : transparentIndex !== undefined
           ? { transparentIndex }
           : {};
-    let image = pcxToImageData(decodePcx(raw, options));
-    if (VERTICALLY_FLIPPED_TEXTURES.has(name.toUpperCase())) image = flipImageDataVertically(image);
-    textures.set(key, image);
+    textures.set(key, pcxToImageData(decodePcx(raw, options)));
   });
   return textures;
 }
@@ -240,8 +221,7 @@ const WALL_TRANSPARENT_INDEX = 1;
 // bank is safe.
 const SIDE_WALL_TRANSPARENT_INDICES = [0, WALL_TRANSPARENT_INDEX];
 
-// A niche-flagged side's own front-wall texture (see
-// VERTICALLY_FLIPPED_TEXTURES above for its orientation fix) reserves a
+// A niche-flagged side's own front-wall texture reserves a
 // *second* colorkey index (0) on top of the
 // usual wall/decoration one (1) — verified against LES1A23A.PCX, where
 // index 0 is a separately-painted red "background" covering 27% of the
@@ -282,9 +262,7 @@ function doubleColorkeyMainTextureIndices(map: DungeonMap): ReadonlySet<number> 
 }
 
 // show_cel2's rev==2 branch always mirrors the OBL2_NUM (right-arch) bank's
-// screen-write direction, unconditionally — not a per-file judgment call
-// like VERTICALLY_FLIPPED_TEXTURES, a structural rule confirmed straight
-// from the source (see codecs/pcx.ts's flipImageDataHorizontally). Applied
+// screen-write direction, unconditionally (see codecs/pcx.ts's flipImageDataHorizontally). Applied
 // to every entry in the bank once, at load time.
 function flipTextureSetHorizontally(textures: ReadonlyMap<number, ImageData>): ReadonlyMap<number, ImageData> {
   const flipped = new Map<number, ImageData>();
@@ -311,7 +289,7 @@ function loadItemTextures(archive: DDLArchive, itemAppearance: readonly (string 
 
 function loadDungeonTextures(archive: DDLArchive, map: DungeonMap, itemAppearance: readonly (string | null)[]): DungeonTextureSet {
   const doubleKey = doubleColorkeyMainTextureIndices(map);
-  return {
+  return orientWallTextures({
     main: loadTextureSet(archive, map.mainTextures, WALL_TRANSPARENT_INDEX, doubleKey),
     left: loadTextureSet(archive, map.leftTextures, SIDE_WALL_TRANSPARENT_INDICES),
     right: loadTextureSet(archive, map.rightTextures, SIDE_WALL_TRANSPARENT_INDICES),
@@ -324,20 +302,25 @@ function loadDungeonTextures(archive: DDLArchive, map: DungeonMap, itemAppearanc
     archLeft: loadTextureSet(archive, map.archLeftTextures, SIDE_WALL_TRANSPARENT_INDICES),
     archRight: flipTextureSetHorizontally(loadTextureSet(archive, map.archRightTextures, SIDE_WALL_TRANSPARENT_INDICES)),
     item: loadItemTextures(archive, itemAppearance),
-  };
+  });
 }
 
-// SIPKY_S/J/Z/V.PCX (142x330) each stack 3 near-identical frames of the
-// D-pad with one arrow highlighted — only the first frame is used, there's
-// no meaningful animation to port here.
-function firstFrame(image: ImageData, frameHeight: number): ImageData {
-  const canvas = document.createElement('canvas');
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const c = canvas.getContext('2d');
-  if (!c) throw new Error('2D canvas context unavailable');
-  c.putImageData(image, 0, 0);
-  return c.getImageData(0, 0, image.width, frameHeight);
+const ARROW_STRIP_FILES: readonly [ArrowButton, string][] = [
+  ['forward', 'SIPKY_S.PCX'],
+  ['back', 'SIPKY_J.PCX'],
+  ['strafeLeft', 'SIPKY_Z.PCX'],
+  ['strafeRight', 'SIPKY_V.PCX'],
+  ['turnLeft', 'SIPKY_SZ.PCX'],
+  ['turnRight', 'SIPKY_SV.PCX'],
+];
+
+function loadFaces(archive: DDLArchive): Map<number, ImageData> {
+  const faces = new Map<number, ImageData>();
+  for (let i = 0; i < 8; i++) {
+    const face = decodeIfPresent(archive, `XICHT${i.toString(16).padStart(2, '0').toUpperCase()}.PCX`, 0);
+    if (face) faces.set(i, face);
+  }
+  return faces;
 }
 
 function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | undefined): DungeonChromeAssets {
@@ -346,18 +329,26 @@ function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | und
   if (topbar) assets.topbar = topbar;
   const dpad = decodeIfPresent(archive, 'SIPKY.PCX');
   if (dpad) assets.dpad = dpad;
-  // Filenames are Czech compass letters (Sever/Jih/Západ/Východ = N/S/W/E),
-  // but the art always draws north-up, so they map to screen position:
-  // S(north)=top=forward, J(south)=bottom=back, Z(west)=left=turn-left,
-  // V(east)=right=turn-right — see dungeon-view.ts's DPAD_QUADRANTS.
-  const hoverUp = decodeIfPresent(archive, 'SIPKY_S.PCX');
-  if (hoverUp) assets.dpadHoverUp = firstFrame(hoverUp, dpad?.height ?? 102);
-  const hoverDown = decodeIfPresent(archive, 'SIPKY_J.PCX');
-  if (hoverDown) assets.dpadHoverDown = firstFrame(hoverDown, dpad?.height ?? 102);
-  const hoverLeft = decodeIfPresent(archive, 'SIPKY_Z.PCX');
-  if (hoverLeft) assets.dpadHoverLeft = firstFrame(hoverLeft, dpad?.height ?? 102);
-  const hoverRight = decodeIfPresent(archive, 'SIPKY_V.PCX');
-  if (hoverRight) assets.dpadHoverRight = firstFrame(hoverRight, dpad?.height ?? 102);
+  const arrowStrips: Partial<Record<ArrowButton, ImageData>> = {};
+  for (const [button, name] of ARROW_STRIP_FILES) {
+    const strip = decodeIfPresent(archive, name, 0);
+    if (strip) arrowStrips[button] = strip;
+  }
+  assets.arrowStrips = arrowStrips;
+  const compass = decodeIfPresent(archive, 'KOMPAS.PCX');
+  if (compass) assets.compass = compass;
+  const desk = decodeIfPresent(archive, 'DESK.PCX');
+  if (desk) assets.desk = desk;
+  const okno = decodeIfPresent(archive, 'OKNO.PCX');
+  if (okno) assets.okno = okno;
+  const death = decodeIfPresent(archive, 'DEATH.PCX', 0);
+  if (death) assets.death = death;
+  const faces = loadFaces(archive);
+  if (faces.size > 0) assets.faces = faces;
+  const moneyFont = archive.extract('SADA7.FON');
+  if (moneyFont) assets.moneyFont = parseBitmapFont(moneyFont);
+  const nameFont = archive.extract('FONT4X8.FON');
+  if (nameFont) assets.nameFont = parseBitmapFont(nameFont);
   if (deskPanel) assets.deskPanel = deskPanel;
   return assets;
 }
@@ -367,8 +358,40 @@ function loadDungeonChromeAssets(archive: DDLArchive, deskPanel: ImageData | und
 // colorkey convention as chargen's roster) rather than threading them
 // through from character-creation.ts — each screen loads its own assets,
 // same convention loadDungeonChromeAssets/loadDungeonTextures already use.
-function loadInventoryAssets(archive: DDLArchive): InventoryAssets {
+function loadWornSprites(archive: DDLArchive, names: readonly string[]): Map<number, ImageData> {
+  const sprites = new Map<number, ImageData>();
+  names.forEach((name, i) => {
+    const image = decodeIfPresent(archive, name, 0);
+    if (image) sprites.set(i + 1, image);
+  });
+  return sprites;
+}
+
+function iconLoader(archive: DDLArchive): (icon: number) => ImageData | undefined {
+  const cache = new Map<number, ImageData | undefined>();
+  return (icon) => {
+    if (icon < 0) return undefined;
+    if (!cache.has(icon)) {
+      const lib = archive.extract(iconLibName(icon));
+      cache.set(icon, lib ? decodeIcon(lib, icon) : undefined);
+    }
+    return cache.get(icon);
+  };
+}
+
+function loadInventoryAssets(archive: DDLArchive, itemsFile: ItemsFile | null): InventoryAssets {
   const assets: InventoryAssets = {};
+  assets.svitek = decodeIfPresent(archive, 'SVITEK.PCX');
+  assets.frame = decodeIfPresent(archive, 'RAMECEK.PCX', 0);
+  assets.icon = iconLoader(archive);
+  if (itemsFile) {
+    assets.wornMale = loadWornSprites(archive, itemsFile.wornMale);
+    assets.wornFemale = loadWornSprites(archive, itemsFile.wornFemale);
+  }
+  const fonts = loadChargenFonts(archive);
+  const bold = archive.extract('SADA16.FON');
+  if (bold) assets.boldFont = parseBitmapFont(bold);
+  if (fonts) assets.sheetFonts = { text: fonts.font7, symbols: fonts.symbols };
   const arch = decodeIfPresent(archive, 'IOBLOUK.PCX');
   if (arch) assets.arch = arch;
   const deskPanel = decodeIfPresent(archive, 'IDESKA.PCX');
@@ -418,7 +441,8 @@ async function enterDungeon(
   const mapBuffer = await tryAutoLoadMap(START_MAP);
   if (!mapBuffer) return false;
   const itemsBuffer = await tryAutoLoadMap('ITEMS.DAT');
-  const itemAppearance = itemsBuffer ? parseItemsFile(itemsBuffer).itemAppearance : [];
+  const itemsFile = itemsBuffer ? parseItemsFile(itemsBuffer) : null;
+  const itemAppearance = itemsFile?.itemAppearance ?? [];
 
   // MA_LOADL/MC_PASSFAIL map transitions (dungeon.ts's pendingTransition):
   // ITEMS.DAT is a single global catalog shared by every map (loaded once
@@ -439,7 +463,7 @@ async function enterDungeon(
   const map = parseMapFile(mapBuffer);
   const textures = loadDungeonTextures(archive, map, itemAppearance);
   const levelTexts = await loadLevelTexts(START_MAP);
-  const inventoryAssets = loadInventoryAssets(archive);
+  const inventoryAssets = loadInventoryAssets(archive, itemsFile);
   const { result } = runDungeonView(
     ctx,
     { map, sector: start?.sector ?? map.startSector, direction: start?.direction ?? (map.startDirection as Direction) },
@@ -449,6 +473,7 @@ async function enterDungeon(
     loadMap,
     levelTexts,
     inventoryAssets,
+    { items: itemsFile?.items ?? [] },
   );
   await result; // resolves when KONEC is clicked
   return true;

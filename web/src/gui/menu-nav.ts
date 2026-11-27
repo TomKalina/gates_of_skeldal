@@ -14,6 +14,19 @@ export type MenuChoice = 0 | 1 | 2 | 3 | 4;
 // up (see docs/port-graph.md's Phase C entry).
 export const MENU_RECT = { x: 220, y: 300, width: 206, height: 177 } as const;
 
+export const BUTTON_FRAME_MS = 75;
+export const BUTTON_LAST_FRAME = 4;
+
+export function stepButtonFrames(positions: number[], selecting: readonly boolean[]): boolean {
+  let changed = false;
+  positions.forEach((pos, i) => {
+    const next = Math.max(0, Math.min(BUTTON_LAST_FRAME, pos + (selecting[i] ? 1 : -1)));
+    if (next !== pos) changed = true;
+    positions[i] = next;
+  });
+  return changed;
+}
+
 export function clampMenuIndex(index: number): MenuChoice {
   if (index <= 0) return 0;
   if (index >= 4) return 4;

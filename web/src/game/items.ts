@@ -1,3 +1,5 @@
+import { kamenickyToUnicode } from '../formats/enc-file';
+
 export const TITEM_SIZE = 222;
 
 export const ItemType = {
@@ -63,13 +65,9 @@ export interface ItemDef {
 }
 
 function cString(bytes: Uint8Array, offset: number, len: number): string {
-  let out = '';
-  for (let i = 0; i < len; i++) {
-    const c = bytes[offset + i] ?? 0;
-    if (c === 0) break;
-    out += String.fromCharCode(c);
-  }
-  return out;
+  let end = offset;
+  while (end < offset + len && end < bytes.length && bytes[end] !== 0) end++;
+  return kamenickyToUnicode(bytes.subarray(offset, end));
 }
 
 function shorts(view: DataView, offset: number, count: number): number[] {

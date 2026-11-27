@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MENU_ITEMS, MENU_RECT, clampMenuIndex, hitTestMenu, navigateMenu } from './menu-nav';
+import { MENU_ITEMS, MENU_RECT, clampMenuIndex, hitTestMenu, navigateMenu, stepButtonFrames } from './menu-nav';
 import type { HotspotMask } from './hotspot-mask';
 
 // A synthetic mask the size of the real click region, split into 5 equal
@@ -56,5 +56,18 @@ describe('hitTestMenu', () => {
     const { width, height } = MENU_RECT;
     const blank: HotspotMask = { width, height, indices: new Uint8Array(width * height) };
     expect(hitTestMenu(blank, MENU_RECT.x + 10, MENU_RECT.y + 10)).toBeNull();
+  });
+});
+
+describe('stepButtonFrames', () => {
+  it('advances selected buttons and rewinds the rest, clamped to the frame range', () => {
+    const pos = [0, 4, 2, 0, 3];
+    expect(stepButtonFrames(pos, [true, true, false, false, false])).toBe(true);
+    expect(pos).toEqual([1, 4, 1, 0, 2]);
+  });
+
+  it('reports no change once every button rests', () => {
+    const pos = [0, 0, 0, 0, 4];
+    expect(stepButtonFrames(pos, [false, false, false, false, true])).toBe(false);
   });
 });

@@ -32,4 +32,9 @@ describe('hotspotAt', () => {
     expect(hotspotAt(m, 220, 300, 221, 300)).toBe(0);
     expect(hotspotAt(m, 0, 0, 1, 0)).toBe(0);
   });
+
+  it('floors fractional canvas coordinates onto the mask pixel grid', () => {
+    expect(hotspotAt(mask(), 100, 200, 101.6, 200.4)).toBe(0);
+    expect(hotspotAt(mask(), 100, 200, 100.9, 201.99)).toBe(1);
+  });
 });

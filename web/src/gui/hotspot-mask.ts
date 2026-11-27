@@ -32,8 +32,8 @@ export interface HotspotMask {
 // the 0-based hotspot ID, or null for "no hotspot" (raw index 0) or
 // out-of-bounds.
 export function hotspotAt(mask: HotspotMask, regionX: number, regionY: number, x: number, y: number): number | null {
-  const mx = x - regionX;
-  const my = y - regionY;
+  const mx = Math.floor(x - regionX);
+  const my = Math.floor(y - regionY);
   if (mx < 0 || mx >= mask.width || my < 0 || my >= mask.height) return null;
   const value = mask.indices[my * mask.width + mx] ?? 0;
   return value === 0 ? null : value - 1;

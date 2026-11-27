@@ -42,6 +42,21 @@ function buildKamenickyToWindows1250Table(): Uint8Array {
 }
 const KAMENICKY_TABLE = buildKamenickyToWindows1250Table();
 
+let unicodeToKamenickyTable: Map<string, number> | undefined;
+
+export function unicodeToKamenicky(text: string): Uint8Array {
+  if (!unicodeToKamenickyTable) {
+    unicodeToKamenickyTable = new Map();
+    const decoder = new TextDecoder('windows-1250');
+    for (let code = 0; code < 0x80; code++) unicodeToKamenickyTable.set(String.fromCharCode(code), code);
+    for (const [kamenicky, windows] of KAMENICKY_TO_WINDOWS_1250) unicodeToKamenickyTable.set(decoder.decode(new Uint8Array([windows])), kamenicky);
+  }
+  const out = new Uint8Array(text.length);
+  let n = 0;
+  for (const ch of text) out[n++] = unicodeToKamenickyTable.get(ch) ?? 0x3f;
+  return out.subarray(0, n);
+}
+
 function decodeRunningSumCipher(bytes: Uint8Array): Uint8Array {
   const out = new Uint8Array(bytes.length);
   let last = 0;
@@ -52,7 +67,7 @@ function decodeRunningSumCipher(bytes: Uint8Array): Uint8Array {
   return out;
 }
 
-function kamenickyToUnicode(bytes: Uint8Array): string {
+export function kamenickyToUnicode(bytes: Uint8Array): string {
   const windows1250 = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) windows1250[i] = KAMENICKY_TABLE[bytes[i]!]!;
   return new TextDecoder('windows-1250').decode(windows1250);

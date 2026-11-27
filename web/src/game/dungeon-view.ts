@@ -1,12 +1,20 @@
-import { behind, computeVisibleGrid, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
+import { behind, canStep, computeVisibleGrid, stepToward, passageTextTrigger, pendingTransition, pickUpFloorItem, putBackFloorItem, runConfiguredAction, stepBackward, stepForward, touchFrontWall, turnLeft, turnRight, type DungeonState, type FloorItem, type ViewCell } from './dungeon';
 import type { DungeonMap } from '../formats/map-file';
-import { drawInventoryScreen, type InventoryAssets } from './inventory-view';
+import { BAG_RECT, drawInventoryScreen, HUMAN_RECT, INV_X, INV_Y, RING_RECTS, SWAP_DESK_RECT, wornSlotAt, type InfoBox, type InventoryAssets } from './inventory-view';
+import { bagClick, bagSlotAt, canWear, computeVlastnosti, humanClick, itemRequirements, ringClick, type InventoryResult } from './inventory';
+import type { ItemDef } from './items';
+import { primaryWallRect, secondaryWallRect, type WallRect } from './wall-textures';
 import { readSave, writeSave } from './save';
 import { depositItems, type Character } from './party';
-import { faceThumbnail } from './portraits';
+import { faceThumbnail, imageDataToCanvas } from './portraits';
+import { drawPartyBar, faceFrameForLives, partySlotRect, type PartyBarMember } from './party-bar';
+import { drawAlignedText, fontColors, rgb555, type BitmapFont } from '../gfx/bitmap-font';
 import { stepAllAnimations } from './animation';
 import { pumpTick } from '../platform/events';
 import { calcPoints, floorCeilBand, mapPos, wallCellBounds, VIEW_SIZE_X, VIEW_SIZE_Y, type Edge } from './perspective';
+import { aliveMobs, healMember, mobsInSector, partyAlive, partyAttack, tickEncounter, type Encounter, type EncounterEvent } from './encounter';
+import { MA, MC, runMacros, textIndex, twoParms, type MacroAction, type MacroHost, type MacroTable } from './macros';
+import type { Mob } from './mobs';
 
 export interface DungeonTextureSet {
   main: ReadonlyMap<number, ImageData>;
@@ -23,6 +31,20 @@ export interface DungeonTextureSet {
   // by the raw 1-based item number (see dungeon.ts's FloorItem) — resolved
   // from ITEMS.DAT's TITEM.vzhled via items-file.ts.
   item: ReadonlyMap<number, ImageData>;
+  mob?: ReadonlyMap<number, ImageData>;
+}
+
+export interface Consumable {
+  heal?: number;
+  gold?: number;
+}
+
+export interface DungeonWorld {
+  encounter?: Encounter;
+  macros?: { table: MacroTable; states: Uint8Array };
+  consumables?: ReadonlyMap<number, Consumable>;
+  endings?: { victory: string; defeat: string };
+  items?: readonly ItemDef[];
 }
 
 // The real dungeon screen's chrome (TOPBAR.PCX, SIPKY.PCX) — all optional
@@ -30,15 +52,15 @@ export interface DungeonTextureSet {
 // asset is missing, same convention as every other screen in this port.
 export interface DungeonChromeAssets {
   topbar?: ImageData;
-  // SIPKY.PCX: the base D-pad art, all 4 arrows shown. SIPKY_S/J/Z/V.PCX are
-  // the same image with one arrow highlighted, keyed by which screen
-  // position they highlight (up/down/left/right) — see the note by
-  // DPAD_QUADRANTS for why the Czech compass-letter filenames map this way.
   dpad?: ImageData;
-  dpadHoverUp?: ImageData;
-  dpadHoverDown?: ImageData;
-  dpadHoverLeft?: ImageData;
-  dpadHoverRight?: ImageData;
+  arrowStrips?: Partial<Record<ArrowButton, ImageData>>;
+  compass?: ImageData;
+  desk?: ImageData;
+  okno?: ImageData;
+  faces?: ReadonlyMap<number, ImageData>;
+  death?: ImageData;
+  moneyFont?: BitmapFont;
+  nameFont?: BitmapFont;
   // POSTAVY.PCX — reused here purely for its baked-in face crops (see
   // portraits.ts), same as the chargen roster box.
   deskPanel?: ImageData;
@@ -123,26 +145,25 @@ const TOPBAR_BUTTONS = {
   uloz: { x: 145, y: 0, width: 60, height: TOPBAR_HEIGHT },
   obnov: { x: 205, y: 0, width: 60, height: TOPBAR_HEIGHT },
 } as const;
-// The blank strip past the last icon cell where the real game prints the
-// party's gold total — always 0 for now, there's no economy/loot system yet.
 const GOLD_TEXT_X = 540;
 
-// SIPKY.PCX (142x102): a diamond D-pad — up/down/left/right triangular
-// arrows around a center skull medallion. Quadrant boxes are generous
-// hand-measured rects (not per-pixel masks), same convention as every other
-// hotspot in this port. Screen-position keys, not compass directions —
-// SIPKY_S/J/Z/V.PCX's names are Czech compass letters (Sever/Jih/Západ/
-// Východ = N/S/W/E) but the artwork always draws north-up, so "S" highlights
-// the TOP arrow, "J" the bottom, "Z" the left, "V" the right; wired to
-// forward/back/turn-left/turn-right the same as the arrow keys.
 const DPAD_SIZE = { width: 142, height: 102 };
-const DPAD_QUADRANTS = {
-  up: { x: 40, y: 0, width: 55, height: 35 },
-  down: { x: 40, y: 65, width: 55, height: 37 },
-  left: { x: 0, y: 28, width: 42, height: 46 },
-  right: { x: 100, y: 28, width: 42, height: 46 },
-} as const;
-type DpadDirection = keyof typeof DPAD_QUADRANTS;
+const ARROWS_ORIGIN = { x: 498, y: 378 };
+const ARROW_STRIP_STEP = 110;
+const ARROW_ANIM_PHASES = 6;
+const CHROME_TICK_MS = 50;
+const COMPASS = { x: 476, y: 0, frameHeight: 16, frames: 40, framesPerTurn: 10 };
+const MONEY = { right: 460, bottom: 13, color: rgb555(28, 28, 21) };
+export type ArrowButton = 'forward' | 'back' | 'strafeLeft' | 'strafeRight' | 'turnLeft' | 'turnRight';
+const ARROW_BUTTONS: readonly [ArrowButton, Rect][] = [
+  ['forward', { x: 561, y: 378, width: 38, height: 30 }],
+  ['turnLeft', { x: 530, y: 387, width: 31, height: 32 }],
+  ['strafeLeft', { x: 529, y: 419, width: 27, height: 35 }],
+  ['back', { x: 560, y: 446, width: 39, height: 29 }],
+  ['turnRight', { x: 599, y: 387, width: 30, height: 32 }],
+  ['strafeRight', { x: 605, y: 420, width: 28, height: 35 }],
+];
+const RELATIVE_STEP_ARROWS: readonly ArrowButton[] = ['forward', 'strafeRight', 'back', 'strafeLeft'];
 
 // game/clk_map.c's pick_item_ click regions — id0 (left) and id1 (right)
 // halves of this rect, together spanning the near-sector floor. Absolute
@@ -161,9 +182,6 @@ const PARTY_BAR_WIDTH = 5;
 const PARTY_BAR_GAP = 2;
 const PARTY_PORTRAIT_WIDTH = 58;
 const PARTY_BOX_WIDTH = PARTY_PORTRAIT_WIDTH + (PARTY_BAR_WIDTH + PARTY_BAR_GAP) * 3 + 4;
-// Left margin reserved for the reference's decorative chain-and-skull
-// column — no asset hook for that art exists yet (same gap as the chargen
-// panel), so it stays a flat fill.
 const PARTY_ROW_X = 24;
 
 // TS counterpart of the first static view shown by builder.c's render_scene
@@ -195,19 +213,20 @@ export function runDungeonView(
   loadMap: MapLoader = () => Promise.resolve(null),
   initialLevelTexts: ReadonlyMap<number, string> = new Map(),
   inventoryAssets: InventoryAssets = {},
+  world: DungeonWorld = {},
 ): DungeonViewHandle {
   const canvas = ctx.canvas;
   let state = initial;
   let textures = initialTextures;
   let levelTexts = initialLevelTexts;
   let party = initialParty;
-  let hoverDpad: DpadDirection | null = null;
+  let arrowAnim: { button: ArrowButton; phase: number } | null = null;
+  let compassPhase = 0;
   let statusText = '';
-  // game/inv.c's inventory/equipment screen (Phase D2a: chrome + open/close
-  // only, see inventory-view.ts's own header comment for what's deferred).
-  // Always shows the first party member — real inv.c switches via clicking
-  // the party portrait strip (`start_invetory`), not built yet.
   let inventoryOpen = false;
+  let selected = 0;
+  let statsMode = false;
+  let info: InfoBox | null = null;
   // game/inv.c's picked_item — the group currently "on the cursor" after a
   // pick_item_ click, waiting to be dropped back on the floor (clicking the
   // same pile again) or deposited into a party member's backpack (clicking
@@ -217,6 +236,8 @@ export function runDungeonView(
   let heldItem: number[] | null = null;
   let cursorX = -1000;
   let cursorY = -1000;
+  const encounter = world.encounter;
+  let ending: 'victory' | 'defeat' | null = null;
 
   let resolveResult!: () => void;
   const result = new Promise<void>((resolve) => {
@@ -329,12 +350,7 @@ export function runDungeonView(
   // levels, one bucket per level, no interpolation): fraction of original
   // color retained at depth d is (14-3d)/14 for the fade-to-map-color half,
   // (5-d)/5 for the fade-to-black half — so alpha (fraction of the *target*
-  // color mixed in) is 3d/14 or d/5 respectively. Applying this as ONE flat
-  // overlay after every layer (arch+main+sec, or the side-wall image) has
-  // been drawn onto a cell's rect is mathematically identical to shading
-  // each texture independently before compositing them (same alpha/target
-  // for every layer at a given depth — alpha-over composition distributes
-  // over blending), not merely a visual approximation.
+  // color mixed in) is 3d/14 or d/5 respectively.
   function applyDepthShade(cell: ViewCell, x: number, y: number, width: number, height: number): void {
     const shaded = state.map.sectors[cell.sector]?.shaded ?? false;
     const alpha = shaded ? cell.depth / 5 : (3 * cell.depth) / 14;
@@ -344,6 +360,36 @@ export function runDungeonView(
     ctx.globalAlpha = alpha;
     ctx.fillRect(x, y, width, height);
     ctx.globalAlpha = 1;
+  }
+
+  const shadeCache = new WeakMap<ImageData, Map<string, HTMLCanvasElement>>();
+  function shadedDrawable(cell: ViewCell, image: ImageData): HTMLCanvasElement {
+    const shaded = state.map.sectors[cell.sector]?.shaded ?? false;
+    const alpha = shaded ? cell.depth / 5 : (3 * cell.depth) / 14;
+    if (alpha <= 0) return toDrawable(image);
+    const { r, g, b } = state.map.fadeColor;
+    const color = shaded ? '#000000' : `rgb(${r}, ${g}, ${b})`;
+    const key = `${color}/${alpha}`;
+    let variants = shadeCache.get(image);
+    if (!variants) {
+      variants = new Map();
+      shadeCache.set(image, variants);
+    }
+    let canvas = variants.get(key);
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const c = canvas.getContext('2d');
+      if (!c) throw new Error('2D canvas context unavailable');
+      c.drawImage(toDrawable(image), 0, 0);
+      c.globalCompositeOperation = 'source-atop';
+      c.globalAlpha = alpha;
+      c.fillStyle = color;
+      c.fillRect(0, 0, image.width, image.height);
+      variants.set(key, canvas);
+    }
+    return canvas;
   }
 
   function drawSideWall(cell: ViewCell, near: Rect, far: Rect, side: 'left' | 'right', image: ImageData | undefined): void {
@@ -397,6 +443,10 @@ export function runDungeonView(
   // behind it by the time this runs and shows through the gaps.
   function drawFrontWall(cell: ViewCell): void {
     const rect = rectAtDepthLateral(cell.depth + 1, cell.lateral);
+    let missing = false;
+    const paint = (image: ImageData, r: WallRect): void => {
+      ctx.drawImage(shadedDrawable(cell, image), r.x, r.y, r.width, r.height);
+    };
     // draw_basic_sector draws the arch overlay(s) *before* the main/sec
     // wall texture — a decorative frame painted behind whatever art
     // (door, window, plain wall) sits in front of it, at the exact same
@@ -404,19 +454,20 @@ export function runDungeonView(
     // applies plac to these two calls).
     if (cell.frontArchLeftTexture !== null) {
       const image = textures.archLeft.get(cell.frontArchLeftTexture);
-      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+      if (image) paint(image, primaryWallRect(rect, image.width, image.height, 0));
     }
     if (cell.frontArchRightTexture !== null) {
       const image = textures.archRight.get(cell.frontArchRightTexture);
-      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+      if (image) paint(image, primaryWallRect(rect, image.width, image.height, 0, true));
     }
     if (cell.frontWallTexture !== null) {
       const image = textures.main.get(cell.frontWallTexture);
       if (image) {
-        ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+        paint(image, primaryWallRect(rect, image.width, image.height, cell.frontPlac));
       } else {
         ctx.fillStyle = '#553';
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+        missing = true;
       }
     }
     // Secondary slot (sec/secAnim) is a fully independent texture from prim
@@ -424,11 +475,9 @@ export function runDungeonView(
     // texture at all (prim=0) and shows entirely through sec.
     if (cell.frontSecTexture !== null) {
       const image = textures.main.get(cell.frontSecTexture);
-      if (image) ctx.drawImage(toDrawable(image), rect.x, rect.y, rect.width, rect.height);
+      if (image) paint(image, secondaryWallRect(rect, image.width, image.height, cell.frontSecOffset.x, cell.frontSecOffset.y));
     }
-    // One overlay covering every layer just drawn (arch/main/sec) — see
-    // applyDepthShade's own comment for why this is exact, not approximate.
-    applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
+    if (missing) applyDepthShade(cell, rect.x, rect.y, rect.width, rect.height);
   }
 
   // engine1.c: `static int items_indextab[][2]={{0,0},{-1,3},{1,7},{-1,7},
@@ -469,20 +518,113 @@ export function runDungeonView(
     for (const item of cell.floorItems) drawFloorItem(cell, item);
   }
 
+  function drawMob(cell: ViewCell, mob: Mob): void {
+    const image = textures.mob?.get(mob.cisloVzoru);
+    if (!image) return;
+    const pos = mapPos(viewportGeometry, cell.lateral, cell.depth, 64, 40, 0);
+    const width = ((image.width * pos.scale) / 320) * perspectiveScaleX;
+    const height = ((image.height * pos.scale) / 320) * perspectiveScaleY;
+    const x = VIEWPORT.x + pos.x * perspectiveScaleX - width / 2;
+    const y = VIEWPORT.y + pos.y * perspectiveScaleY - height;
+    ctx.drawImage(toDrawable(image), x, y, width, height);
+    applyDepthShade(cell, x, y, width, height);
+  }
+
+  function drawMobs(cell: ViewCell): void {
+    if (!encounter || cell.depth === 0) return;
+    for (const mob of mobsInSector(encounter, cell.sector)) drawMob(cell, mob);
+  }
+
   function drawTopBar(): void {
     if (chrome.topbar) ctx.putImageData(chrome.topbar, 0, 0);
     else {
       ctx.fillStyle = '#111';
       ctx.fillRect(0, 0, canvas.width, TOPBAR_HEIGHT);
     }
-    // Gold count — always 0, there's no economy/loot system yet.
-    ctx.font = '11px monospace';
-    ctx.fillStyle = '#d9c88a';
-    ctx.textBaseline = 'top';
-    ctx.fillText('0', GOLD_TEXT_X, 2);
+    if (chrome.compass) {
+      ctx.drawImage(imageDataToCanvas(chrome.compass), 0, compassPhase * COMPASS.frameHeight, chrome.compass.width, COMPASS.frameHeight, COMPASS.x, COMPASS.y, chrome.compass.width, COMPASS.frameHeight);
+    }
+    const gold = String(encounter?.gold ?? 0);
+    if (chrome.moneyFont) {
+      drawAlignedText(ctx, chrome.moneyFont, gold, MONEY.right, MONEY.bottom, 2, 2, fontColors(MONEY.color));
+    } else {
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#d9c88a';
+      ctx.textBaseline = 'top';
+      ctx.fillText(gold, GOLD_TEXT_X, 2);
+    }
   }
 
-  function drawPartyBox(member: Character, x: number): void {
+  function compassTarget(): number {
+    return ((3 - state.direction) * COMPASS.framesPerTurn + COMPASS.frames) % COMPASS.frames;
+  }
+
+  function stepCompass(): boolean {
+    let delta = compassPhase - compassTarget();
+    if (delta < -COMPASS.frames / 2) delta += COMPASS.frames;
+    if (delta >= COMPASS.frames / 2) delta -= COMPASS.frames;
+    const speed = Math.sign(delta);
+    if (speed === 0) return false;
+    compassPhase = (compassPhase - speed + COMPASS.frames) % COMPASS.frames;
+    return true;
+  }
+
+  function stepArrows(): boolean {
+    if (!arrowAnim) return false;
+    arrowAnim.phase--;
+    if (arrowAnim.phase <= 0) arrowAnim = null;
+    return true;
+  }
+
+  function startArrowAnim(button: ArrowButton): void {
+    arrowAnim = { button, phase: ARROW_ANIM_PHASES };
+  }
+
+  function drawArrows(): void {
+    const strip = arrowAnim ? chrome.arrowStrips?.[arrowAnim.button] : undefined;
+    if (arrowAnim && strip) {
+      const frame = arrowAnim.phase > 4 ? 8 - arrowAnim.phase : arrowAnim.phase;
+      const top = (frame - 2) * ARROW_STRIP_STEP;
+      if (top >= 0) {
+        ctx.drawImage(imageDataToCanvas(strip), 0, top, DPAD_SIZE.width, DPAD_SIZE.height, ARROWS_ORIGIN.x, ARROWS_ORIGIN.y, DPAD_SIZE.width, DPAD_SIZE.height);
+        return;
+      }
+    }
+    if (chrome.dpad && (arrowAnim || !chrome.desk)) ctx.drawImage(toDrawable(chrome.dpad), ARROWS_ORIGIN.x, ARROWS_ORIGIN.y);
+    else if (!chrome.desk) {
+      ctx.strokeStyle = '#555';
+      ctx.strokeRect(ARROWS_ORIGIN.x + 0.5, ARROWS_ORIGIN.y + 0.5, DPAD_SIZE.width, DPAD_SIZE.height);
+    }
+  }
+
+  function partyBarMembers(): PartyBarMember[] {
+    return party.map((member, i) => {
+      const maxHp = encounter?.maxHp[i] ?? member.stats.maxHp;
+      const hp = encounter?.hp[i] ?? maxHp;
+      return {
+        name: member.name,
+        portraitIndex: member.portraitIndex,
+        group: 1,
+        dead: hp <= 0,
+        faceFrame: faceFrameForLives(hp, maxHp),
+        fill: { lives: maxHp > 0 ? Math.max(0, hp) / maxHp : 0, stamina: 1, mana: member.stats.maxMana > 0 ? 1 : 0 },
+      };
+    });
+  }
+
+  function partySlotAt(x: number, y: number): number | null {
+    if (chrome.desk && chrome.okno) {
+      for (let i = 0; i < party.length; i++) if (rectContains(partySlotRect(chrome.okno, i), x, y)) return i;
+      return null;
+    }
+    const positions = partyBoxPositions();
+    for (let i = 0; i < party.length; i++) {
+      if (rectContains({ x: positions[i]!, y: BOTTOM_BAR.y, width: PARTY_BOX_WIDTH, height: PARTY_BOX_HEIGHT }, x, y)) return i;
+    }
+    return null;
+  }
+
+  function drawPartyBox(member: Character, index: number, x: number): void {
     const y = BOTTOM_BAR.y;
     ctx.strokeStyle = '#555';
     ctx.strokeRect(x + 0.5, y + 0.5, PARTY_PORTRAIT_WIDTH, PARTY_PORTRAIT_HEIGHT);
@@ -498,15 +640,27 @@ export function runDungeonView(
     ctx.textBaseline = 'top';
     ctx.fillText(String(member.level), x + 3, y + PARTY_PORTRAIT_HEIGHT - 13);
 
-    // Three vertical resource bars right of the portrait — there's no
-    // combat/damage system yet, so every bar always reads full (matches a
-    // freshly rolled, undamaged party).
-    let barX = x + PARTY_PORTRAIT_WIDTH + PARTY_BAR_GAP;
-    for (const color of ['#c96a2e', '#5aa552', '#3f7fc9']) {
-      ctx.fillStyle = color;
-      ctx.fillRect(barX, y, PARTY_BAR_WIDTH, PARTY_PORTRAIT_HEIGHT);
-      barX += PARTY_BAR_WIDTH + PARTY_BAR_GAP;
+    const hp = encounter?.hp[index];
+    const maxHp = encounter?.maxHp[index];
+    const hpRatio = hp !== undefined && maxHp ? hp / maxHp : 1;
+    if (hpRatio <= 0) {
+      ctx.fillStyle = 'rgba(40, 40, 40, 0.75)';
+      ctx.fillRect(x, y, PARTY_PORTRAIT_WIDTH, PARTY_PORTRAIT_HEIGHT);
+    } else if ((encounter?.memberCooldown[index] ?? 0) > 0) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.fillRect(x, y, PARTY_PORTRAIT_WIDTH, PARTY_PORTRAIT_HEIGHT);
     }
+
+    let barX = x + PARTY_PORTRAIT_WIDTH + PARTY_BAR_GAP;
+    ['#c96a2e', '#5aa552', '#3f7fc9'].forEach((color, bar) => {
+      const ratio = bar === 0 ? Math.max(0, hpRatio) : 1;
+      const height = PARTY_PORTRAIT_HEIGHT * ratio;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(barX, y, PARTY_BAR_WIDTH, PARTY_PORTRAIT_HEIGHT);
+      ctx.fillStyle = color;
+      ctx.fillRect(barX, y + PARTY_PORTRAIT_HEIGHT - height, PARTY_BAR_WIDTH, height);
+      barX += PARTY_BAR_WIDTH + PARTY_BAR_GAP;
+    });
 
     const stripY = y + PARTY_PORTRAIT_HEIGHT + PARTY_NAME_STRIP_GAP;
     const stripHeight = PARTY_BOX_HEIGHT - PARTY_PORTRAIT_HEIGHT - PARTY_NAME_STRIP_GAP;
@@ -521,22 +675,10 @@ export function runDungeonView(
     ctx.textAlign = 'left';
   }
 
-  function dpadImage(): ImageData | undefined {
-    if (hoverDpad === 'up') return chrome.dpadHoverUp ?? chrome.dpad;
-    if (hoverDpad === 'down') return chrome.dpadHoverDown ?? chrome.dpad;
-    if (hoverDpad === 'left') return chrome.dpadHoverLeft ?? chrome.dpad;
-    if (hoverDpad === 'right') return chrome.dpadHoverRight ?? chrome.dpad;
-    return chrome.dpad;
-  }
-
-  function dpadOrigin(): { x: number; y: number } {
-    return { x: BOTTOM_BAR.x + BOTTOM_BAR.width - DPAD_SIZE.width - 12, y: BOTTOM_BAR.y };
-  }
-
   // Shared between drawBottomBar and onMouseDown's portrait-deposit hit-test
   // so the clickable rects always match what's actually drawn.
   function partyBoxPositions(): number[] {
-    const dpadOrig = dpadOrigin();
+    const dpadOrig = ARROWS_ORIGIN;
     // Party boxes shrink to fit if they'd otherwise run into the D-pad —
     // no evidence for how the real game lays out a full 6-member party here,
     // so this is a reasonable fit-to-space choice, not a measured fact.
@@ -553,19 +695,15 @@ export function runDungeonView(
   }
 
   function drawBottomBar(): void {
-    ctx.fillStyle = '#111';
-    ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
-
-    const positions = partyBoxPositions();
-    party.forEach((member, i) => drawPartyBox(member, positions[i]!));
-
-    const dpadOrig = dpadOrigin();
-    const image = dpadImage();
-    if (image) ctx.drawImage(toDrawable(image), dpadOrig.x, dpadOrig.y);
-    else {
-      ctx.strokeStyle = '#555';
-      ctx.strokeRect(dpadOrig.x + 0.5, dpadOrig.y + 0.5, DPAD_SIZE.width, DPAD_SIZE.height);
+    if (chrome.desk && chrome.okno) {
+      drawPartyBar(ctx, { desk: chrome.desk, okno: chrome.okno, faces: chrome.faces, nameFont: chrome.nameFont, death: chrome.death }, partyBarMembers());
+    } else {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(BOTTOM_BAR.x, BOTTOM_BAR.y, BOTTOM_BAR.width, BOTTOM_BAR.height);
+      const positions = partyBoxPositions();
+      party.forEach((member, i) => drawPartyBox(member, i, positions[i]!));
     }
+    drawArrows();
 
     if (statusText) {
       ctx.fillStyle = '#ff8080';
@@ -577,8 +715,17 @@ export function runDungeonView(
 
   function draw(): void {
     if (inventoryOpen) {
-      const character = party[0];
-      if (character) drawInventoryScreen(ctx, character, inventoryAssets);
+      const character = party[selected];
+      if (character) {
+        const items = world.items ?? [];
+        drawInventoryScreen(ctx, { character, vls: computeVlastnosti(character, items, selected), items, statsMode, info }, inventoryAssets);
+      }
+      drawTopBar();
+      drawBottomBar();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, TOPBAR_HEIGHT, canvas.width, 1);
+      ctx.fillRect(0, BOTTOM_BAR.y - 1, canvas.width, 1);
+      drawHeldItemCursor();
       return;
     }
     // Sky-colored, not black: drawFloorCeilBase's single fallback split (see
@@ -599,22 +746,128 @@ export function runDungeonView(
 
     // Farthest first, so a nearer transparent wall's colorkey-punched gaps
     // reveal whatever farther geometry was already painted behind it.
-    const byDepthDescending = [...grid].sort((a, b) => b.depth - a.depth);
+    const byDepthDescending = [...grid].sort((a, b) => b.depth - a.depth || Math.abs(b.lateral) - Math.abs(a.lateral));
     for (const cell of byDepthDescending) {
       drawFloorCeilCell(cell, 0);
       drawFloorCeilCell(cell, 1);
-    }
-    for (const cell of byDepthDescending) {
       drawSideWalls(cell);
       drawFrontWall(cell);
     }
     for (const cell of byDepthDescending) {
       drawFloorItems(cell);
+      drawMobs(cell);
     }
 
     drawTopBar();
     drawBottomBar();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, TOPBAR_HEIGHT, canvas.width, 1);
+    ctx.fillRect(0, BOTTOM_BAR.y - 1, canvas.width, 1);
     drawHeldItemCursor();
+    drawEnding();
+  }
+
+  function drawEnding(): void {
+    if (!ending) return;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(VIEWPORT.x, VIEWPORT.y, VIEWPORT.width, VIEWPORT.height);
+    ctx.fillStyle = ending === 'victory' ? '#e8d48a' : '#e06060';
+    ctx.font = '20px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const text = ending === 'victory' ? (world.endings?.victory ?? 'Konec hry.') : (world.endings?.defeat ?? 'Družina padla.');
+    ctx.fillText(text, VIEWPORT.x + VIEWPORT.width / 2, VIEWPORT.y + VIEWPORT.height / 2);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+  }
+
+  function holdsItem(item: number): boolean {
+    if (heldItem?.some((held) => Math.abs(held) === item)) return true;
+    return party.some((member) => member.inv.includes(item) || member.wearing.includes(item));
+  }
+
+  let lockCancelled = false;
+
+  const macroHost: MacroHost = {
+    sideFlags: (side) => state.map.sides[side]?.flags ?? 0,
+    monsterInGame: () => (encounter ? aliveMobs(encounter).length > 0 : false),
+    monsterInRoom: (sector) => (encounter ? mobsInSector(encounter, sector).length > 0 : false),
+    haveItem: holdsItem,
+    testFlag: () => false,
+    random100: () => Math.floor(Math.random() * 100),
+    lastSendAction: 0,
+    exec: (action: MacroAction, side: number) => execMacro(action, side),
+  };
+
+  function execMacro(action: MacroAction, side: number): boolean | void {
+    if (action.action === MA.TEXTL) {
+      statusText = levelTexts.get(textIndex(action)) ?? '';
+      return;
+    }
+    if (action.action === MA.SENDA) {
+      const view = new DataView(action.data.buffer, action.data.byteOffset, action.data.byteLength);
+      runConfiguredAction(state.map, view.getUint16(4, true), view.getUint16(6, true), view.getUint16(8, true));
+      return;
+    }
+    if (action.action === MA.LOCK) {
+      const { parm1 } = twoParms(action);
+      if (holdsItem(parm1)) return false;
+      lockCancelled = true;
+      if (world.macros) runMacros(world.macros.table, world.macros.states, side, MC.LOCKINFO, macroHost);
+      return true;
+    }
+    if (action.action === MA.ENDGM) {
+      ending = 'victory';
+      return true;
+    }
+  }
+
+  function runSideMacros(side: number, flags: number): void {
+    if (world.macros) runMacros(world.macros.table, world.macros.states, side, flags, macroHost);
+  }
+
+  function describe(event: EncounterEvent): string {
+    const name = (member: number) => party[member]?.name ?? '';
+    switch (event.kind) {
+      case 'mobHit':
+        return `${event.mob.name} zraní: ${name(event.member)} -${event.damage}`;
+      case 'mobMiss':
+        return `${event.mob.name} minul: ${name(event.member)}`;
+      case 'memberHit':
+        return event.killed ? `${name(event.member)} skolil: ${event.mob.name}` : `${name(event.member)} zasáhl: ${event.mob.name} -${event.damage}`;
+      case 'memberMiss':
+        return `${name(event.member)} minul: ${event.mob.name}`;
+      case 'noTarget':
+        return `${name(event.member)}: není na koho útočit.`;
+      case 'mobMoved':
+        return '';
+    }
+  }
+
+  function attackWith(member: number): void {
+    if (!encounter || ending) return;
+    const event = partyAttack(encounter, state.map, state.sector, state.direction, member);
+    if (!event) return;
+    statusText = describe(event);
+    draw();
+  }
+
+  function consumeHeld(member: number): boolean {
+    const item = heldItem?.length === 1 ? heldItem[0] : undefined;
+    const consumable = item !== undefined ? world.consumables?.get(item) : undefined;
+    if (!consumable || !encounter) return false;
+    if (consumable.gold) {
+      encounter.gold += consumable.gold;
+      statusText = `Zlato +${consumable.gold}`;
+    }
+    if (consumable.heal) {
+      const healed = healMember(encounter, member, consumable.heal);
+      if (healed <= 0) return false;
+      statusText = `${party[member]?.name ?? ''} +${healed} životů`;
+    }
+    heldItem = null;
+    draw();
+    return true;
   }
 
   // engine1.c's own picked_item cursor draw: the held group's real (first,
@@ -623,7 +876,8 @@ export function runDungeonView(
   function drawHeldItemCursor(): void {
     const itemNumber = heldItem?.[0];
     if (itemNumber === undefined) return;
-    const image = textures.item.get(itemNumber);
+    const ikona = world.items?.[Math.abs(itemNumber) - 1]?.ikona;
+    const image = (ikona !== undefined ? inventoryAssets.icon?.(ikona) : undefined) ?? textures.item.get(itemNumber);
     if (!image) return;
     ctx.drawImage(toDrawable(image), cursorX - image.width / 2, cursorY - image.height / 2);
   }
@@ -646,14 +900,99 @@ export function runDungeonView(
     draw();
   }
 
+  function itemInfo(id: number): InfoBox | null {
+    const items = world.items;
+    const it = items?.[Math.abs(id) - 1];
+    const character = party[selected];
+    if (!items || !it || !character) return null;
+    return {
+      title: it.jmeno,
+      description: it.popis,
+      requirements: itemRequirements(items, Math.abs(id)),
+      warn: !canWear(computeVlastnosti(character, items, selected), items, Math.abs(id)),
+    };
+  }
+
+  function updateInventoryInfo(x: number, y: number): void {
+    const character = party[selected];
+    if (heldItem) {
+      info = y <= BOTTOM_BAR.y ? itemInfo(heldItem[0]!) : null;
+      return;
+    }
+    if (statsMode || !character || !rectContains(BAG_RECT, x, y)) {
+      info = null;
+      return;
+    }
+    const pos = bagSlotAt(x - INV_X, y - INV_Y);
+    const id = pos < character.invSize ? (character.inv[pos] ?? 0) : 0;
+    info = id ? itemInfo(id) : null;
+  }
+
+  function applyInventory(result: InventoryResult | null): void {
+    if (!result) return;
+    party = party.map((m, i) => (i === selected ? result.character : m));
+    heldItem = result.held ? [...result.held] : null;
+    for (const group of result.dropped) putBackFloorItem(state.map, state.sector, state.direction, 0, group);
+  }
+
+  function openInventory(index: number): void {
+    const member = party[index];
+    if (!member) return;
+    selected = index;
+    inventoryOpen = true;
+    statsMode = member.bonusPoints !== 0 && !heldItem;
+    info = null;
+  }
+
+  function closeInventory(): void {
+    inventoryOpen = false;
+    statsMode = false;
+    info = null;
+  }
+
+  function onInventoryMouseDown(e: MouseEvent, x: number, y: number): void {
+    const items = world.items ?? [];
+    const character = party[selected];
+    const slot = partySlotAt(x, y);
+    if (e.button === 2) {
+      if (slot !== null && heldItem) {
+        const { character: member, leftover } = depositItems(party[slot]!, heldItem);
+        party = party.map((m, idx) => (idx === slot ? member : m));
+        heldItem = leftover.length > 0 ? [...leftover] : null;
+      } else if (slot === null) {
+        closeInventory();
+      }
+    } else if (e.button === 0 && character) {
+      if (rectContains(BAG_RECT, x, y)) {
+        if (!statsMode) applyInventory(bagClick(character, heldItem, bagSlotAt(x - INV_X, y - INV_Y), items, selected));
+      } else if (RING_RECTS.some((r) => rectContains(r, x, y))) {
+        applyInventory(ringClick(character, heldItem, RING_RECTS.findIndex((r) => rectContains(r, x, y)), items, selected));
+      } else if (rectContains(HUMAN_RECT, x, y)) {
+        const pointed = heldItem ? null : wornSlotAt(character, items, inventoryAssets, x, y);
+        applyInventory(humanClick(character, heldItem, x - HUMAN_RECT.x, pointed, items, selected));
+      } else if (rectContains(SWAP_DESK_RECT, x, y)) {
+        statsMode = !statsMode;
+      } else if (slot !== null && slot !== selected && !heldItem) {
+        openInventory(slot);
+      }
+    }
+    updateInventoryInfo(x, y);
+    cursorX = x;
+    cursorY = y;
+    draw();
+  }
+
   function onMouseDown(e: MouseEvent): void {
-    if (inventoryOpen) return; // clicking a slot/ring/doll isn't wired yet — see inventory-view.ts
     const rect = canvas.getBoundingClientRect();
     const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
     const offX = rect.left + (rect.width - canvas.width * scale) / 2;
     const offY = rect.top + (rect.height - canvas.height * scale) / 2;
     const x = (e.clientX - offX) / scale;
     const y = (e.clientY - offY) / scale;
+    if (inventoryOpen) {
+      onInventoryMouseDown(e, x, y);
+      return;
+    }
 
     if (rectContains(TOPBAR_BUTTONS.konec, x, y)) {
       dispose();
@@ -669,6 +1008,7 @@ export function runDungeonView(
       return;
     }
     // Nastavení and the icon cells have no system to open yet.
+    if (ending) return;
 
     // game/clk_map.c: pick_item_'s rects are registered BEFORE the catch-all
     // clk_touch rect, so they get dispatch priority — checked here ahead of
@@ -697,21 +1037,21 @@ export function runDungeonView(
     // Depositing a held item into a party member's backpack by clicking
     // their portrait box — real inv.c's start_invetory else-branch (the
     // if-branch, switching the open inventory screen to the clicked member,
-    // isn't wired: inventoryOpen always shows party[0], see its own comment).
-    if (heldItem) {
-      const positions = partyBoxPositions();
-      for (let i = 0; i < party.length; i++) {
-        const boxRect = { x: positions[i]!, y: BOTTOM_BAR.y, width: PARTY_BOX_WIDTH, height: PARTY_BOX_HEIGHT };
-        if (rectContains(boxRect, x, y)) {
-          const member = party[i]!;
-          const { character, leftover } = depositItems(member, heldItem);
-          party = party.map((m, idx) => (idx === i ? character : m));
-          heldItem = leftover.length > 0 ? [...leftover] : null;
-          statusText = leftover.length > 0 ? 'Batoh je plný.' : 'Vloženo do batohu.';
-          draw();
-          return;
-        }
+    // isn't wired).
+    const slot = partySlotAt(x, y);
+    if (slot !== null) {
+      if (!heldItem) {
+        attackWith(slot);
+        return;
       }
+      if (consumeHeld(slot)) return;
+      const member = party[slot]!;
+      const { character, leftover } = depositItems(member, heldItem);
+      party = party.map((m, idx) => (idx === slot ? character : m));
+      heldItem = leftover.length > 0 ? [...leftover] : null;
+      statusText = leftover.length > 0 ? 'Batoh je plný.' : 'Vloženo do batohu.';
+      draw();
+      return;
     }
 
     // realgame.c's clk_touch: no matter *where* within its resolved rect
@@ -728,31 +1068,42 @@ export function runDungeonView(
     // sprite-bbox case (a door's own art is usually smaller than the full
     // wall), but far closer than accepting anywhere in the viewport.
     if (rectContains(rectAtDepthLateral(1, 0), x, y)) {
+      lockCancelled = false;
+      runSideMacros(state.sector * 4 + state.direction, MC.TOUCHSUC);
+      if (lockCancelled) {
+        draw();
+        return;
+      }
       const touch = touchFrontWall(state.map, state.sector, state.direction);
-      if (touch.changed || touch.textIndex !== undefined) {
+      if (touch.changed || touch.textIndex !== undefined || world.macros) {
         if (touch.textIndex !== undefined) statusText = levelTexts.get(touch.textIndex) ?? '';
         draw();
       }
       return;
     }
 
-    const dpadOrig = dpadOrigin();
-    const localX = x - dpadOrig.x;
-    const localY = y - dpadOrig.y;
-    for (const [dir, quad] of Object.entries(DPAD_QUADRANTS) as [DpadDirection, Rect][]) {
-      if (rectContains(quad, localX, localY)) {
-        applyDpadDirection(dir);
+    for (const [button, area] of ARROW_BUTTONS) {
+      if (rectContains(area, x, y)) {
+        applyArrow(button);
         return;
       }
     }
   }
 
-  function applyDpadDirection(dir: DpadDirection): void {
+  function applyArrow(button: ArrowButton): void {
+    if (button === 'turnLeft' || button === 'turnRight') {
+      turn(button);
+      return;
+    }
+    const relative = RELATIVE_STEP_ARROWS.indexOf(button);
+    const dir = ((state.direction + relative) % 4) as DungeonState['direction'];
+    attemptStep(dir, (s) => stepToward(s, dir));
+  }
+
+  function turn(button: 'turnLeft' | 'turnRight'): void {
+    state = { ...state, direction: button === 'turnLeft' ? turnLeft(state.direction) : turnRight(state.direction) };
+    startArrowAnim(button);
     statusText = '';
-    if (dir === 'up') state = stepForward(state);
-    else if (dir === 'down') state = stepBackward(state);
-    else if (dir === 'left') state = { ...state, direction: turnLeft(state.direction) };
-    else state = { ...state, direction: turnRight(state.direction) };
     draw();
   }
 
@@ -764,24 +1115,17 @@ export function runDungeonView(
     const x = (e.clientX - offX) / scale;
     const y = (e.clientY - offY) / scale;
 
+    if (inventoryOpen) {
+      const before = info;
+      updateInventoryInfo(x, y);
+      cursorX = x;
+      cursorY = y;
+      if (heldItem || before !== info) draw();
+      return;
+    }
     if (heldItem) {
       cursorX = x;
       cursorY = y;
-      draw();
-    }
-
-    const dpadOrig = dpadOrigin();
-    const localX = x - dpadOrig.x;
-    const localY = y - dpadOrig.y;
-    let next: DpadDirection | null = null;
-    for (const [dir, quad] of Object.entries(DPAD_QUADRANTS) as [DpadDirection, Rect][]) {
-      if (rectContains(quad, localX, localY)) {
-        next = dir;
-        break;
-      }
-    }
-    if (next !== hoverDpad) {
-      hoverDpad = next;
       draw();
     }
   }
@@ -811,19 +1155,29 @@ export function runDungeonView(
       void performTransition(transition);
       return;
     }
-    const textIndex = passageTextTrigger(state.map, state.sector, dir);
+    if (ending) return;
+    const side = state.sector * 4 + dir;
+    const passable = canStep(state.map, state.sector, dir);
+    const blockedByMob = passable && encounter !== undefined && mobsInSector(encounter, state.map.sectors[state.sector]?.stepNext[dir] ?? 0).length > 0;
+    if (blockedByMob) return;
+    const passText = passageTextTrigger(state.map, state.sector, dir);
+    startArrowAnim(RELATIVE_STEP_ARROWS[(dir - state.direction + 4) % 4]!);
     state = step(state);
-    statusText = textIndex !== undefined ? (levelTexts.get(textIndex) ?? '') : '';
+    statusText = passText !== undefined ? (levelTexts.get(passText) ?? '') : '';
+    runSideMacros(side, passable ? MC.PASSSUC : MC.PASSFAIL);
     draw();
+  }
+
+  function onContextMenu(e: MouseEvent): void {
+    e.preventDefault();
   }
 
   function onKeydown(e: KeyboardEvent): void {
     // game/realgame.c: scancode 0x17 ('I') opens the inventory; exit_inv()
-    // (Escape here — the real screen's own catch-all click rect isn't wired
-    // yet) returns to the dungeon view untouched.
+    // (Escape here) returns to the dungeon view untouched.
     if (inventoryOpen) {
-      if (e.code === 'Escape') {
-        inventoryOpen = false;
+      if (e.code === 'Escape' || e.code === 'KeyI') {
+        closeInventory();
         draw();
       }
       return;
@@ -836,14 +1190,22 @@ export function runDungeonView(
         attemptStep(behind(state.direction), stepBackward);
         return;
       case 'ArrowLeft':
-        state = { ...state, direction: turnLeft(state.direction) };
-        break;
+        turn('turnLeft');
+        return;
       case 'ArrowRight':
-        state = { ...state, direction: turnRight(state.direction) };
-        break;
+        turn('turnRight');
+        return;
       case 'KeyI':
-        inventoryOpen = true;
+        openInventory(selected);
         draw();
+        return;
+      case 'Digit1':
+      case 'Digit2':
+      case 'Digit3':
+      case 'Digit4':
+      case 'Digit5':
+      case 'Digit6':
+        attackWith(Number(e.code.slice(5)) - 1);
         return;
       default:
         return;
@@ -861,23 +1223,40 @@ export function runDungeonView(
   const TICK_MS = 100;
   let animationFrameId = 0;
   let lastTickAt = 0;
+  let lastChromeTickAt = 0;
   function tickLoop(now: number): void {
     animationFrameId = requestAnimationFrame(tickLoop);
+    if (now - lastChromeTickAt >= CHROME_TICK_MS && !inventoryOpen) {
+      lastChromeTickAt = now;
+      const compassMoved = stepCompass();
+      const arrowsMoved = stepArrows();
+      if (compassMoved || arrowsMoved) draw();
+    }
     if (now - lastTickAt < TICK_MS) return;
     lastTickAt = now;
     pumpTick();
-    if (stepAllAnimations(state.map)) draw();
+    let changed = stepAllAnimations(state.map);
+    if (encounter && !ending) {
+      const events = tickEncounter(encounter, state.map, state.sector);
+      const message = events.map(describe).filter(Boolean).pop();
+      if (message) statusText = message;
+      if (!partyAlive(encounter)) ending = 'defeat';
+      if (events.length > 0 || encounter.memberCooldown.some((c) => c > 0)) changed = true;
+    }
+    if (changed) draw();
   }
 
   function dispose(): void {
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('mousemove', onMouseMove);
+    canvas.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('keydown', onKeydown);
     cancelAnimationFrame(animationFrameId);
   }
 
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('keydown', onKeydown);
   draw();
   animationFrameId = requestAnimationFrame(tickLoop);

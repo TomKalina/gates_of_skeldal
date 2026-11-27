@@ -1,4 +1,4 @@
-import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, popFloorItemGroup, pushFloorItemGroup, SD_AUTOANIM, SD_LEFT_ARC, SD_PASS_ACTION, SD_PLAY_IMPS, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, type DungeonMap, type MapTransition } from '../formats/map-file';
+import { A_OPEN_CLOSE, mapTransitionAt, placedItemsAt, popFloorItemGroup, pushFloorItemGroup, SD_AUTOANIM, SD_LEFT_ARC, SD_PASS_ACTION, SD_PLAY_IMPS, SD_POSITION, SD_PRIM_VIS, SD_RIGHT_ARC, SD_SEC_VIS, SD_TRANSPARENT, sideAt, textTriggerAt, toggleDoor, touchTextTriggerAt, type DungeonMap, type MapTransition } from '../formats/map-file';
 import { applyAction } from './actions';
 
 // Direction indices match TSECTOR.step_next order: 0=N, 1=E, 2=S, 3=W.
@@ -61,7 +61,7 @@ export function passageTextTrigger(map: DungeonMap, sector: number, dir: Directi
 // A_RUN_SEC/A_DISPLAY_TEXT/A_CODELOCK_LOG*/A_OPEN_TELEPORT/
 // A_CLOSE_TELEPORT/0) silently no-ops, matching actions.ts's own
 // documented pending scope.
-function runConfiguredAction(map: DungeonMap, sector: number, dir: number, action: number): boolean {
+export function runConfiguredAction(map: DungeonMap, sector: number, dir: number, action: number): boolean {
   if (action === A_OPEN_CLOSE) {
     toggleDoor(map, sector, dir);
     return true;
@@ -163,6 +163,10 @@ export function stepBackward(state: DungeonState): DungeonState {
   return stepThrough(state, behind(state.direction));
 }
 
+export function stepToward(state: DungeonState, dir: Direction): DungeonState {
+  return stepThrough(state, dir);
+}
+
 export interface ViewCell {
   depth: number;
   // 0 = straight ahead, negative = left of center, positive = right —
@@ -182,6 +186,8 @@ export interface ViewCell {
   // sec=15 (LES1A11A.PCX, a closed wooden door). Previously unrendered
   // entirely, since this MVP only ever read prim/primAnim.
   frontSecTexture: number | null;
+  frontSecOffset: { x: number; y: number };
+  frontPlac: number;
   // draw_basic_sector's decorative arch overlay, drawn *before* the main
   // wall texture (see dungeon-view.ts's drawFrontWall) — an independent
   // index/gate per half (SD_LEFT_ARC/SD_RIGHT_ARC), each pulling from its
@@ -328,6 +334,8 @@ export function computeVisibleGrid(map: DungeonMap, startSector: number, facing:
       floorTexture: sectorData.floor,
       ceilTexture: sectorData.ceil,
       frontSecTexture: visibleSecTexture(frontSide),
+      frontSecOffset: { x: frontSide?.xsec ?? 0, y: frontSide?.ysec ?? 0 },
+      frontPlac: ((frontSide?.oblouk ?? 0) & SD_POSITION) >> 5,
       frontArchLeftTexture: frontSide && frontSide.flags & SD_LEFT_ARC ? archTextureIndex(frontSide) : null,
       frontArchRightTexture: frontSide && frontSide.flags & SD_RIGHT_ARC ? archTextureIndex(frontSide) : null,
       floorItems: floorItemsForSector(map, sector, depth, facing),

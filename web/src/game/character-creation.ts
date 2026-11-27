@@ -19,6 +19,9 @@ import {
 import { canvasRectToClientRect, clientToCanvasPoint } from '../platform/canvas-transform';
 import { faceThumbnail as sharedFaceThumbnail, imageDataToCanvas } from './portraits';
 import { hotspotAt, type HotspotMask } from '../gui/hotspot-mask';
+import { drawAlignedText, drawBitmapText, fontColors, rgb555, textWidth, transBar, type BitmapFont, type FontColors } from '../gfx/bitmap-font';
+import { drawPartyBar, type PartyBarMember } from './party-bar';
+import { drawStatsSheet, plusButtonRects } from './chargen-sheet';
 
 // chargen.c displays its 8 portraits in this file-index order (poradi[]) —
 // see party.ts's PORTRAIT_DISPLAY_ORDER comment for why this isn't 0..7.
@@ -100,7 +103,41 @@ export interface CharacterCreationAssets {
   // CHARGENM.PCX's raw palette-index data (see gui/hotspot-mask.ts) — the
   // real per-pixel button hit-test. Falls back to BUTTONS' rects if missing.
   hotspotMask?: HotspotMask;
+  pearlMask?: HotspotMask;
+  desk?: ImageData;
+  okno?: ImageData;
+  faces?: ReadonlyMap<number, ImageData>;
+  buttonPanel?: ImageData;
+  buttonPanelDisabled?: ImageData;
+  fonts?: ChargenFonts;
 }
+
+export interface ChargenFonts {
+  tiny: BitmapFont;
+  font6: BitmapFont;
+  font7: BitmapFont;
+  litt: BitmapFont;
+  symbols: BitmapFont;
+}
+
+const NAME_FIELD = { x: 120, y: 2, width: 105, height: 15 };
+const NAME_COLORS = fontColors(rgb555(31, 31, 0));
+const TOPBAR_COLORS: FontColors = [0, rgb555(22, 14, 4), rgb555(24, 16, 6), rgb555(25, 17, 7), 0, 0, 0];
+const BUTTON_ON_COLORS: FontColors = [0, rgb555(31, 27, 4), rgb555(30, 26, 4), rgb555(29, 25, 4), 0, 0, 0];
+const BUTTON_OFF_COLORS: FontColors = [0, rgb555(10, 10, 10), rgb555(10, 10, 10), rgb555(10, 10, 10), 0, 0, 0];
+const BUTTON_PANEL = { x: 520, y: 378 };
+const BUTTON_DISABLED_ORIGIN = { x: 524, y: 392 };
+const BUTTON_ROWS = [
+  { y: 0, height: 18 },
+  { y: 18, height: 20 },
+  { y: 37, height: 20 },
+  { y: 55, height: 21 },
+];
+const CHARGEN_BAR_FILL = { lives: 1, stamina: 0, mana: 0 };
+const ERROR_BAR = { y: 362, height: 16, textX: 10, textY: 364 };
+const TEXT_NAME_REQUIRED = 'Tvá postava by se měla nějak jmenovat! Napiš její jméno na klávesnici.';
+const TEXT_RESET_ALL = 'Opravdu si přeješ vymazat navolené postavy a začít znovu?';
+const TEXT_BACK_TO_MENU = 'Opravdu si přeješ vrátit se do úvodní nabídky? Volba "ano" navíc vymaže všechny nadefinované postavy!';
 
 export interface CharacterCreationHandle {
   result: Promise<Character[] | null>;
@@ -133,16 +170,6 @@ function faceThumbnail(assets: CharacterCreationAssets, portraitIndex: number): 
   return sharedFaceThumbnail(assets.deskPanel, portraitIndex);
 }
 
-// TS counterpart of chargen.c's enter_generator(): pick a portrait, drag the
-// "pearl" around the attribute wheel to pick a stat-range archetype, name the
-// character, allocate bonus points on a stat-review screen, and repeat until
-// the party (up to MAX_PARTY_SIZE) is ready. Rebuilt against reference
-// screenshots of the real game — see docs/port-graph.md for exactly what's
-// still simplified (no per-pixel button masks, native <input>/confirm()
-// instead of the real GUI toolkit; equipment/food/water/resistance are
-// rendered as the fixed values a fresh level-1 character always has, not
-// modeled per-character state, since there's no inventory or game-clock
-// system yet).
 export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: CharacterCreationAssets = {}): CharacterCreationHandle {
   const canvas = ctx.canvas;
   const root = canvas.parentElement;
@@ -168,14 +195,11 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   nameInput.style.position = 'absolute';
   nameInput.style.font = '11px monospace';
   nameInput.style.padding = '0 2px';
-  // Reference shows the name field as a solid black box with bright yellow
-  // bitmap-font text and a blinking underscore cursor; a native <input>'s
-  // caret is a plain vertical bar and can't reproduce the underscore look,
-  // but background/text/caret color should still match.
   nameInput.style.background = '#000';
   nameInput.style.color = '#eee84c';
   nameInput.style.border = 'none';
   nameInput.style.caretColor = '#eee84c';
+  if (assets.fonts) nameInput.style.opacity = '0';
   root.appendChild(nameInput);
 
   function currentRanges(): AttributeRanges {
@@ -230,10 +254,54 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     // shows these as ranges, not the pending character's exact rolled
     // stats — those only appear in the parchment stat sheet.
     const ranges = currentRanges();
-    ctx.fillText(`SÍLA: ${ranges.strengthLow}-${ranges.strengthHigh}`, 230, 2);
-    ctx.fillText(`U.MAG: ${ranges.magicLow}-${ranges.magicHigh}`, 330, 2);
-    ctx.fillText(`POHYB: ${ranges.speedLow}-${ranges.speedHigh}`, 430, 2);
-    ctx.fillText(`OBRAT: ${ranges.dexterityLow}-${ranges.dexterityHigh}`, 530, 2);
+    const labels: [string, number][] = [
+      [`SÍLA: ${ranges.strengthLow}-${ranges.strengthHigh}`, 230],
+      [`U.MAG: ${ranges.magicLow}-${ranges.magicHigh}`, 330],
+      [`POHYB: ${ranges.speedLow}-${ranges.speedHigh}`, 430],
+      [`OBRAT: ${ranges.dexterityLow}-${ranges.dexterityHigh}`, 530],
+    ];
+    const fonts = assets.fonts;
+    for (const [text, x] of labels) {
+      if (fonts) drawBitmapText(ctx, fonts.tiny, text, x, 2, TOPBAR_COLORS);
+      else ctx.fillText(text, x, 2);
+    }
+    if (fonts) drawNameField(fonts.font6);
+  }
+
+  function drawNameField(font: BitmapFont): void {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(NAME_FIELD.x, NAME_FIELD.y, NAME_FIELD.width, NAME_FIELD.height);
+    const text = nameInput.value;
+    drawBitmapText(ctx, font, text, NAME_FIELD.x, NAME_FIELD.y, NAME_COLORS);
+    const cursor = nameInput.selectionStart ?? text.length;
+    drawBitmapText(ctx, font, '_', NAME_FIELD.x + textWidth(font, text.slice(0, cursor)), NAME_FIELD.y + 3, NAME_COLORS);
+  }
+
+  function drawPearl(pearl: ImageData, mask: HotspotMask, x: number, y: number): void {
+    const under = ctx.getImageData(x, y, mask.width, mask.height);
+    for (let i = 0; i < mask.width * mask.height; i++) {
+      const index = mask.indices[i]!;
+      if (index === 0) continue;
+      const at = i * 4;
+      if (index < 128) {
+        under.data[at] = pearl.data[at]!;
+        under.data[at + 1] = pearl.data[at + 1]!;
+        under.data[at + 2] = pearl.data[at + 2]!;
+      } else {
+        for (let c = 0; c < 3; c++) {
+          const v = ((under.data[at + c]! >> 3) & 30) >> 1;
+          under.data[at + c] = (v << 3) | (v >> 2);
+        }
+      }
+    }
+    ctx.putImageData(under, x, y);
+  }
+
+  function pearlRect(): { x: number; y: number; width: number; height: number } {
+    const width = assets.pearl?.width ?? 12;
+    const height = assets.pearl?.height ?? 12;
+    const offset = pearlOffsetFromAngle(angleDeg, radius);
+    return { x: PEARL_CENTER.x + offset.dx - (width >> 1), y: PEARL_CENTER.y + offset.dy - (height >> 1), width, height };
   }
 
   function drawSelectPage(): void {
@@ -258,7 +326,10 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     const pearlOffset = pearlOffsetFromAngle(angleDeg, radius);
     const pearlX = PEARL_CENTER.x + pearlOffset.dx;
     const pearlY = PEARL_CENTER.y + pearlOffset.dy;
-    if (assets.pearl) {
+    if (assets.pearl && assets.pearlMask) {
+      const rect = pearlRect();
+      drawPearl(assets.pearl, assets.pearlMask, rect.x, rect.y);
+    } else if (assets.pearl) {
       // drawImage, not putImageData — the pearl's colorkey-punched corners
       // need to composite over the wheel art already drawn, not overwrite it.
       ctx.drawImage(
@@ -362,7 +433,11 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   // compute it from yet.
   function drawReviewPage(character: Character): void {
     if (assets.svitek) ctx.putImageData(assets.svitek, DESK.x, DESK.y);
-    else {
+    if (assets.fonts) {
+      drawStatsSheet(ctx, { text: assets.fonts.font7, symbols: assets.fonts.symbols }, character);
+      return;
+    }
+    if (!assets.svitek) {
       ctx.strokeStyle = '#665';
       ctx.strokeRect(DESK.x, DESK.y, DESK.width, DESK.height);
     }
@@ -472,6 +547,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   }
 
   function bonusButtonRects(character: Character): Partial<Record<PrimaryStat, { x: number; y: number; width: number; height: number }>> {
+    if (assets.fonts) return plusButtonRects({ text: assets.fonts.font7, symbols: assets.fonts.symbols }, character);
     const rects: Partial<Record<PrimaryStat, { x: number; y: number; width: number; height: number }>> = {};
     for (const row of computeLeftRows(character)) {
       if (row.stat) rects[row.stat] = bonusButtonRect(row);
@@ -551,15 +627,18 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
 
     drawTopbar();
 
+    if (assets.desk && assets.okno) {
+      drawPartyBar(ctx, { desk: assets.desk, okno: assets.okno, faces: assets.faces, nameFont: assets.fonts?.litt }, partyBarMembers());
+    } else {
     ctx.fillStyle = '#111';
     ctx.fillRect(PANEL.x, PANEL.y, PANEL.width, PANEL.height);
-    // The reference renders this whole strip as carved-stone panel art (a
-    // chain-and-skull column left of the portrait box, rope/carving around
-    // it, a separate frame around "Vše znovu") — there's no asset hook for
-    // that yet in CharacterCreationAssets, so it stays a flat fill.
     drawRosterBox();
+    }
 
-    if (statusText) {
+    if (statusText && assets.fonts) {
+      transBar(ctx, 0, ERROR_BAR.y, canvas.width, ERROR_BAR.height, 0);
+      drawBitmapText(ctx, assets.fonts.font6, statusText, ERROR_BAR.textX, ERROR_BAR.textY, NAME_COLORS);
+    } else if (statusText) {
       ctx.fillStyle = '#ff8080';
       ctx.font = '12px monospace';
       ctx.fillText(statusText, ROSTER_BOX.x + ROSTER_BOX.width + 10, PANEL.y + PANEL.height - 14);
@@ -579,14 +658,38 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     // does anything in review mode (discards the current roll, back to
     // select), so it must read as clickable there too.
     const canErase = mode === 'review';
-    drawButton(BUTTONS.accept, canAccept);
-    drawButton(BUTTONS.start, canStart);
-    drawButton(BUTTONS.erase, canErase);
-    drawButton(BUTTONS.resetAll, true);
+    drawButtons([canAccept, canStart, canErase, true]);
 
     // The reference keeps the typed name visible in the topbar on the
     // review/stat-sheet page too (e.g. "Sir Rogen_") — it's never hidden.
     positionNameInput();
+  }
+
+  function partyBarMembers(): PartyBarMember[] {
+    const members: PartyBarMember[] = roster
+      .filter((m): m is Character => m !== null)
+      .map((m) => ({ name: m.name, portraitIndex: m.portraitIndex, group: 1, fill: CHARGEN_BAR_FILL }));
+    if (firstEmptySlot(roster) !== -1) members.push({ name: nameInput.value, portraitIndex: selectedPortrait ?? -1, group: 1, fill: CHARGEN_BAR_FILL });
+    return members;
+  }
+
+  function drawButtons(enabled: readonly boolean[]): void {
+    const panel = assets.buttonPanel;
+    const font = assets.fonts?.tiny;
+    if (!panel || !font) {
+      CHARGENM_BUTTON_ORDER.forEach((key, i) => drawButton(BUTTONS[key], enabled[i]!));
+      return;
+    }
+    ctx.drawImage(imageDataToCanvas(panel), BUTTON_PANEL.x, BUTTON_PANEL.y);
+    CHARGENM_BUTTON_ORDER.forEach((key, i) => {
+      const row = BUTTON_ROWS[i]!;
+      const on = enabled[i]!;
+      if (!on && assets.buttonPanelDisabled) {
+        const source = imageDataToCanvas(assets.buttonPanelDisabled);
+        ctx.drawImage(source, 0, row.y, source.width, row.height, BUTTON_DISABLED_ORIGIN.x, BUTTON_DISABLED_ORIGIN.y + row.y, source.width, row.height);
+      }
+      drawAlignedText(ctx, font, BUTTONS[key].label, BUTTON_PANEL.x + 50, BUTTON_PANEL.y + 27 + i * 19, 1, 2, on ? BUTTON_ON_COLORS : BUTTON_OFF_COLORS);
+    });
   }
 
   function selectPortraitAtSlot(slot: number): void {
@@ -596,22 +699,23 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     if (usedPortraitSet().has(portrait) && portrait !== selectedPortrait) return;
     selectedPortrait = portrait;
     statusText = '';
+    nameInput.focus();
     draw();
   }
 
   function rollPendingCharacter(): void {
     if (selectedPortrait === null) {
-      statusText = 'Pick a portrait first.';
+      statusText = 'Nejdřív vyber portrét.';
       draw();
       return;
     }
     if (!validateCharacterName(nameInput.value)) {
-      statusText = 'Name is required.';
+      statusText = TEXT_NAME_REQUIRED;
       draw();
       return;
     }
     if (firstEmptySlot(roster) === -1) {
-      statusText = 'Party is full.';
+      statusText = 'Družina je plná.';
       draw();
       return;
     }
@@ -625,7 +729,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     if (!pendingCharacter) return;
     const slot = firstEmptySlot(roster);
     if (slot === -1) {
-      statusText = 'Party is full.';
+      statusText = 'Družina je plná.';
       draw();
       return;
     }
@@ -649,7 +753,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   }
 
   function resetAll(): void {
-    if (!window.confirm('Reset the whole party and start over?')) return;
+    if (!window.confirm(TEXT_RESET_ALL)) return;
     roster = createEmptyRoster();
     pendingCharacter = null;
     selectedPortrait = null;
@@ -663,7 +767,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
 
   function startGame(): void {
     if (!isPartyReady(roster)) {
-      statusText = 'Add at least one character first.';
+      statusText = 'Nejdřív přidej aspoň jednu postavu.';
       draw();
       return;
     }
@@ -673,7 +777,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   }
 
   function cancel(): void {
-    if (!window.confirm('Cancel character creation?')) return;
+    if (!window.confirm(TEXT_BACK_TO_MENU)) return;
     dispose();
     resolveResult(null);
   }
@@ -693,7 +797,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     }
 
     if (mode === 'select') {
-      if (rectContains(WHEEL_RECT, x, y)) {
+      if (assets.pearlMask ? insidePearl(x, y) : rectContains(WHEEL_RECT, x, y)) {
         dragging = true;
         updateWheelFromPoint(x, y);
         return;
@@ -713,6 +817,11 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
     } else if (button === 'start') startGame();
     else if (button === 'erase') eraseCurrent();
     else if (button === 'resetAll') resetAll();
+  }
+
+  function insidePearl(x: number, y: number): boolean {
+    const rect = pearlRect();
+    return x >= rect.x && y >= rect.y && x <= rect.x + rect.width && y <= rect.y + rect.height;
   }
 
   function updateWheelFromPoint(x: number, y: number): void {
@@ -755,6 +864,7 @@ export function runCharacterCreation(ctx: CanvasRenderingContext2D, assets: Char
   window.addEventListener('keydown', onKeydown);
   window.addEventListener('resize', onWindowResize);
   nameInput.addEventListener('input', () => draw());
+  nameInput.addEventListener('keyup', () => draw());
   draw();
 
   return { result, dispose };
