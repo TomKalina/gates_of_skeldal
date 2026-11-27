@@ -77,8 +77,8 @@ export function baseVlastnosti(character: Character, partyIndex?: number): numbe
   v[VLS.UTOK_L] = 1;
   v[VLS.UTOK_H] = 2;
   if (partyIndex !== undefined && partyIndex < 3) {
-    if (s.strength > 20) v[VLS.UTOK_H]++;
-    if (s.dexterity > 20) v[VLS.OBRAN_H]++;
+    if (s.strength > 20) v[VLS.UTOK_H] = 3;
+    if (s.dexterity > 20) v[VLS.OBRAN_H] = 3;
   }
   return v;
 }
